@@ -3,12 +3,19 @@ GENERAL RULES
 Make your OWN branch off main before working on it!
 Commit changes regularly, and submit a pull request when done.
 
-Basic Git Commands:
-git add .                     stages all changed files
-git commit -m "<message>"     commits changes with message
-git push                      pushes all local files to github
+Basic Git Commands
+-------------------------
+git add .
+> stages all changed files
 
-git pull                      pulls all updated files to local
+git commit -m "<message>"
+> commits changes with message
+
+git push
+> pushes all local files to github
+
+git pull
+> pulls all updated files to local
 
 ABOUT
 -------------------------
