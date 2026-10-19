@@ -25,7 +25,7 @@ def is_valid(url):
     try:
         parsed = urlparse(url)
 
-        if parsed.scheme not in set(["http", "https"]):
+        if parsed.scheme not in {"http", "https"}:
             return False
 
         hostname = parsed.hostname
@@ -45,17 +45,40 @@ def is_valid(url):
             for domain in allowed_domains
         ):
             return False
+        path = parsed.path.lower()
 
+        # Handles infinite folder recursion traps (/a/b/a/b/a/b)
+        path_segments = [seg for seg in path.split('/') if seg]
+        if len(path_segments) != len(set(path_segments)):
+            # If directory names repeat
+            return False
+
+        # Handles extremely deep paths
+        if len(path_segments) > 10:
+            return False
+
+        query = parsed.query.lower()
+        full_url = url.lower()
+        trap_keywords = [
+            'calendar', 'event', 'date', 'action=edit', 'action=download', 'replytocom',
+            'share=', 'login', 'auth', 'filter', 'sort='
+        ]
+        if any(keyword in full_url for keyword in trap_keywords):
+            # Stop long query parameters or infinite calendar loops
+            if len(query) > 100 or 'date=' in query or 'day=' in query:
+                return False
+
+        # Excludes non-HTML files, data formats, archives, and also media files
         if re.match(
             r".*\.(css|js|bmp|gif|jpe?g|ico"
             + r"|png|tiff?|mid|mp2|mp3|mp4"
             + r"|wav|avi|mov|mpeg|ram|m4v|mkv|ogg|ogv|pdf"
             + r"|ps|eps|tex|ppt|pptx|doc|docx|xls|xlsx|names"
             + r"|data|dat|exe|bz2|tar|msi|bin|7z|psd|dmg|iso"
-            + r"|epub|dll|cnf|tgz|sha1"
-            + r"|thmx|mso|arff|rtf|jar|csv"
+            + r"|epub|dll|cnf|tgz|sha1|apk|sql|json|xml|war|py"
+            + r"|thmx|mso|arff|rtf|jar|csv|cpp|c|java|ics"
             + r"|rm|smil|wmv|swf|wma|zip|rar|gz)$",
-            parsed.path.lower()
+            path
         ):
             return False
 
