@@ -1,6 +1,9 @@
 import re
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urljoin
+from urllib.robotparser import RobotFileParser
 
+# Cache dictionary to store rfp instances per domain
+ROBOTS_CACHE = {}
 def scraper(url, resp):
     links = extract_next_links(url, resp)
 
@@ -17,6 +20,30 @@ def extract_next_links(url, resp):
     #         resp.raw_response.content: the content of the page!
     # Return a list with the hyperlinks (as strings) scrapped from resp.raw_response.content
     return list()
+
+def is_allowed_by_bots(url, user_agent = '*'):
+    """
+    Helper function to get robots.txt for a domain, then see if the URL can be crawled
+    """
+    try:
+        parsed = urlparse(url)
+        # Make the base domain URL (https://networklocation)
+        domain = f'{parsed.scheme}://{parsed.netloc}'
+        robots_url = urljoin(domain, '/robots.txt')
+
+        if domain not in ROBOTS_CACHE:
+            rfp = RobotFileParser()
+            rfp.set_url(robots_url)
+            try:
+                rfp.read()
+            except Exception:
+                # if robots.txt does not load, default to that the site allows us to crawl
+                pass
+            ROBOTS_CACHE[domain] = rfp
+    except Exception:
+        # If there is an error, default to true to avoid blocking valid URLs
+        return True
+
 
 def is_valid(url):
     # Decide whether to crawl this url or not. 
@@ -45,6 +72,11 @@ def is_valid(url):
             for domain in allowed_domains
         ):
             return False
+
+        # If robots.txt doesn't allow us
+        if not is_allowed_by_bots(url):
+            return False
+
         path = parsed.path.lower()
 
         # Handles infinite folder recursion traps (/a/b/a/b/a/b)
