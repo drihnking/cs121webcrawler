@@ -1,6 +1,7 @@
 import re
-from urllib.parse import urlparse, urljoin
+from urllib.parse import urlparse, urljoin, urldefrag, urlsplit
 from urllib.robotparser import RobotFileParser
+from bs4 import BeautifulSoup
 
 # Cache dictionary to store rfp instances per domain
 ROBOTS_CACHE = {}
@@ -19,7 +20,30 @@ def extract_next_links(url, resp):
     #         resp.raw_response.url: the url, again
     #         resp.raw_response.content: the content of the page!
     # Return a list with the hyperlinks (as strings) scrapped from resp.raw_response.content
-    return list()
+    
+    url_list = list()
+
+    # Page requested properly
+    if resp.status==200:
+        # Only read contents if it is an HTML
+        url_path = urlsplit(url, allow_fragments=False).path
+        if ('.html' in url_path):
+            with open(resp.raw_response.contents) as file_path:
+                html_parser = BeautifulSoup(file_path)
+                
+                # Add all links found on page to list
+                for link in html_parser.find_all('a'):
+                    list.append(urldefrag(link.get('href'))) # Defragment link
+        
+        # Otherwise, return empty list
+        else:
+            return list()
+
+    # TODO: Check error and handle crashes appropriately
+    # else:
+    #   pass
+
+    return url_list
 
 def is_allowed_by_bots(url, user_agent = '*'):
     """
