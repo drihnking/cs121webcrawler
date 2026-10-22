@@ -23,29 +23,75 @@ def extract_next_links(url, resp):
     #         resp.raw_response.content: the content of the page!
     # Return a list with the hyperlinks (as strings) scrapped from resp.raw_response.content
     
-    url_list = list()
+    url_list = []
 
-    # Page requested properly
-    if resp.status==200:
+    # Page requested properly (Successful response)
+    if resp.status == 200:
+        raw_response = resp.raw_response
+
+        # Return empty list if request is successful but page is empty
+        if raw_response is None or not raw_response.content:
+            return []
+            
         # Only read contents if it is an HTML
-        url_path = urlsplit(url, allow_fragments=False).path
-        if ('.html' in url_path):
-            with open(resp.raw_response.contents) as file_path:
-                html_parser = BeautifulSoup(file_path)
-                
-                # Add all links found on page to list
-                for link in html_parser.find_all('a'):
-                    list.append(urldefrag(link.get('href'))) # Defragment link
-        
+        headers = getattr(raw_response, "headers", {})
+        # Check if the page is html
+        content_type = headers.get("Content-Type", "").lower()
+        if "html" in content_type:
+
+            # Use the final response URL if a redirect was followed.
+            base_url = getattr(raw_response, "url", None) or resp.url or url
+            # Parse the html
+            html_parser = BeautifulSoup(raw_response.content, "html.parser") 
+            # Add all links found on page to list
+            for link in html_parser.find_all('a'):
+                #url_list.append(urldefrag(link.get('href'))) # Defragment link
+                href = link.get('href', '').strip()
+                if href:
+                    absolute_url = urljoin(base_url, href)
+                    absolute_url = urldefrag(absolute_url)[0]
+
+                    if is_valid(absolute_url):
+                        url_list.append(absolute_url)
+
+            return list(set(url_list))
         # Otherwise, return empty list
         else:
-            return list()
+            return []
+    # Check error and handle crashes appropriately
+    # Handle redirects that were not automatically followed
+    elif (resp.status in {301, 302, 303, 307, 308}):
+        # Follow redirect
+        raw_response = resp.raw_response
+        if raw_response is None:
+            return []
+        
+        # Read the redirect destination from the response headers
+        headers = getattr(raw_response, "headers", {})
+        location = headers.get("Location")
 
-    # TODO: Check error and handle crashes appropriately
+        if not location:
+            return []
+        
+        # Find the absolute URL of the redirect destination
+        base_url = getattr(raw_response, "url", None) or resp.url or url
+        redirect_url = urljoin(base_url, location)
+
+        # Remove the fragment
+        redirect_url = urldefrag(redirect_url)[0]
+
+        if is_valid(redirect_url):
+            return [redirect_url]
+        
+        return []
+    return []
+    # # Retry if server crashes
+    # elif (resp.status in {408, 409, 500, 501, 503, 504}):
+    #     # Retry
+    # # Record errors and continue crawling 
     # else:
-    #   pass
-
-    return url_list
+    #     # Record errors and continue with next link
+    
 
 def is_allowed_by_bots(url, user_agent = '*'):
     """
