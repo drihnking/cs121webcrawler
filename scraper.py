@@ -8,9 +8,10 @@ from bs4 import BeautifulSoup
 # Cache dictionary to store rfp instances per domain
 ROBOTS_CACHE = {}
 def scraper(url, resp):
-    links = extract_next_links(url, resp)
+    if not resp or resp.status != 200 or not resp.raw_response or not resp.raw_response.content:
+        return []
 
-    return [link for link in links if is_valid(link)]
+    return extract_next_links(url, resp)
 
 def extract_next_links(url, resp):
     # Implementation required.
@@ -27,40 +28,40 @@ def extract_next_links(url, resp):
 
     # Page requested properly (Successful response)
     if resp.status == 200:
+        # Extract raw response object from the response container
         raw_response = resp.raw_response
 
         # Return empty list if request is successful but page is empty
         if raw_response is None or not raw_response.content:
             return []
-            
-        # Only read contents if it is an HTML
-        headers = getattr(raw_response, "headers", {})
-        # Check if the page is html
-        content_type = headers.get("Content-Type", "").lower()
-        if "html" in content_type:
+        # Determine the base URL for resolving relative links, prioritizing the raw
+        # response URL over response or request URL
+        base_url = getattr(raw_response, "url", None) or resp.url or url
 
-            # Use the final response URL if a redirect was followed.
-            base_url = getattr(raw_response, "url", None) or resp.url or url
-            # Parse the html
-            html_parser = BeautifulSoup(raw_response.content, "html.parser") 
-            # Add all links found on page to list
-            for link in html_parser.find_all('a'):
-                #url_list.append(urldefrag(link.get('href'))) # Defragment link
-                href = link.get('href', '').strip()
-                if href:
-                    absolute_url = urljoin(base_url, href)
-                    absolute_url = urldefrag(absolute_url)[0]
+        # Parse HTML body content using BeautifulSoup and Python's build-in html.parser function
+        html_parser = BeautifulSoup(raw_response.content, "html.parser")
 
-                    if is_valid(absolute_url):
-                        url_list.append(absolute_url)
+        # Iterate over all anchor tags (<a>) found in the parsed HTML document
+        for link in html_parser.find_all('a'):
 
-            return list(set(url_list))
+            # Extract 'href' attribute string and trim whitespace
+            href = link.get('href', '').strip()
+            # Skip empty href attributes or non HTTP schemes
+            if href and not href.startswith(('javascript:', 'mailto:', 'tel:')):
+                # Convert relative path URLS into absolute URLs
+                absolute_url = urljoin(base_url, href)
+                # Strip out fragment identifiers
+                absolute_url = urldefrag(absolute_url)[0]
+
+                if is_valid(absolute_url):
+                    url_list.append(absolute_url)
+        # Convert list to set to eliminate dupes then back
+        return list(set(url_list))
         # Otherwise, return empty list
-        else:
-            return []
+
     # Check error and handle crashes appropriately
     # Handle redirects that were not automatically followed
-    elif (resp.status in {301, 302, 303, 307, 308}):
+    elif resp.status in {301, 302, 303, 307, 308}:
         # Follow redirect
         raw_response = resp.raw_response
         if raw_response is None:
@@ -68,7 +69,8 @@ def extract_next_links(url, resp):
         
         # Read the redirect destination from the response headers
         headers = getattr(raw_response, "headers", {})
-        location = headers.get("Location")
+        # Accounts for case-insensitive header keys
+        location = headers.get("Location") or headers.get("location")
 
         if not location:
             return []
@@ -77,20 +79,14 @@ def extract_next_links(url, resp):
         base_url = getattr(raw_response, "url", None) or resp.url or url
         redirect_url = urljoin(base_url, location)
 
-        # Remove the fragment
         redirect_url = urldefrag(redirect_url)[0]
 
         if is_valid(redirect_url):
             return [redirect_url]
         
-        return []
+
     return []
-    # # Retry if server crashes
-    # elif (resp.status in {408, 409, 500, 501, 503, 504}):
-    #     # Retry
-    # # Record errors and continue crawling 
-    # else:
-    #     # Record errors and continue with next link
+
     
 
 def is_allowed_by_bots(url, user_agent = '*'):
@@ -112,6 +108,9 @@ def is_allowed_by_bots(url, user_agent = '*'):
                 # if robots.txt does not load, default to that the site allows us to crawl
                 pass
             ROBOTS_CACHE[domain] = rfp
+
+        # return permission check using cached RobotFileParser
+        return ROBOTS_CACHE[domain].can_fetch(user_agent, url)
     except Exception:
         # If there is an error, default to true to avoid blocking valid URLs
         return True
