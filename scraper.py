@@ -1,6 +1,12 @@
 import re
-from urllib.parse import urlparse
+import hashlib
 
+from urllib.parse import urlparse, urljoin, urldefrag, urlsplit
+from urllib.robotparser import RobotFileParser
+from bs4 import BeautifulSoup
+
+# Cache dictionary to store rfp instances per domain
+ROBOTS_CACHE = {}
 def scraper(url, resp):
     links = extract_next_links(url, resp)
 
@@ -17,7 +23,23 @@ def extract_next_links(url, resp):
     #         resp.raw_response.content: the content of the page!
     # Return a list with the hyperlinks (as strings) scrapped from resp.raw_response.content
     
-    links = []
+    url_list = list()
+
+    # Page requested properly
+    if resp.status==200:
+        # Only read contents if it is an HTML
+        url_path = urlsplit(url, allow_fragments=False).path
+        if ('.html' in url_path):
+            with open(resp.raw_response.contents) as file_path:
+                html_parser = BeautifulSoup(file_path)
+                
+                # Add all links found on page to list
+                for link in html_parser.find_all('a'):
+                    list.append(urldefrag(link.get('href'))) # Defragment link
+        
+        # Otherwise, return empty list
+        else:
+            
     # Handling errors when status code != 200
     if (resp.status != 200)
     {
@@ -41,24 +63,172 @@ def extract_next_links(url, resp):
     
     return list()
 
+    # TODO: Check error and handle crashes appropriately
+    # else:
+    #   pass
+
+    return url_list
+
+def is_allowed_by_bots(url, user_agent = '*'):
+    """
+    Helper function to get robots.txt for a domain, then see if the URL can be crawled
+    """
+    try:
+        parsed = urlparse(url)
+        # Make the base domain URL (https://networklocation)
+        domain = f'{parsed.scheme}://{parsed.netloc}'
+        robots_url = urljoin(domain, '/robots.txt')
+
+        if domain not in ROBOTS_CACHE:
+            rfp = RobotFileParser()
+            rfp.set_url(robots_url)
+            try:
+                rfp.read()
+            except Exception:
+                # if robots.txt does not load, default to that the site allows us to crawl
+                pass
+            ROBOTS_CACHE[domain] = rfp
+    except Exception:
+        # If there is an error, default to true to avoid blocking valid URLs
+        return True
+
+
 def is_valid(url):
     # Decide whether to crawl this url or not. 
     # If you decide to crawl it, return True; otherwise return False.
     # There are already some conditions that return False.
     try:
         parsed = urlparse(url)
-        if parsed.scheme not in set(["http", "https"]):
+
+        if parsed.scheme not in {"http", "https"}:
             return False
-        return not re.match(
+
+        hostname = parsed.hostname
+
+        if hostname is None:
+            return False
+
+        allowed_domains = [
+            "ics.uci.edu",
+            "cs.uci.edu",
+            "informatics.uci.edu",
+            "stat.uci.edu"
+        ]
+
+        if not any(
+            hostname == domain or hostname.endswith("." + domain)
+            for domain in allowed_domains
+        ):
+            return False
+
+        # If robots.txt doesn't allow us
+        if not is_allowed_by_bots(url):
+            return False
+
+        path = parsed.path.lower()
+
+        # Handles infinite folder recursion traps (/a/b/a/b/a/b)
+        path_segments = [seg for seg in path.split('/') if seg]
+        if len(path_segments) != len(set(path_segments)):
+            # If directory names repeat
+            return False
+
+        # Handles extremely deep paths
+        if len(path_segments) > 10:
+            return False
+
+        query = parsed.query.lower()
+        full_url = url.lower()
+        trap_keywords = [
+            'calendar', 'event', 'date', 'action=edit', 'action=download', 'replytocom',
+            'share=', 'login', 'auth', 'filter', 'sort='
+        ]
+        if any(keyword in full_url for keyword in trap_keywords):
+            # Stop long query parameters or infinite calendar loops
+            if len(query) > 100 or 'date=' in query or 'day=' in query:
+                return False
+
+        # Excludes non-HTML files, data formats, archives, and also media files
+        if re.match(
             r".*\.(css|js|bmp|gif|jpe?g|ico"
             + r"|png|tiff?|mid|mp2|mp3|mp4"
             + r"|wav|avi|mov|mpeg|ram|m4v|mkv|ogg|ogv|pdf"
             + r"|ps|eps|tex|ppt|pptx|doc|docx|xls|xlsx|names"
             + r"|data|dat|exe|bz2|tar|msi|bin|7z|psd|dmg|iso"
-            + r"|epub|dll|cnf|tgz|sha1"
-            + r"|thmx|mso|arff|rtf|jar|csv"
-            + r"|rm|smil|wmv|swf|wma|zip|rar|gz)$", parsed.path.lower())
+            + r"|epub|dll|cnf|tgz|sha1|apk|sql|json|xml|war|py"
+            + r"|thmx|mso|arff|rtf|jar|csv|cpp|c|java|ics"
+            + r"|rm|smil|wmv|swf|wma|zip|rar|gz)$",
+            path
+        ):
+            return False
+
+        return True
 
     except TypeError:
-        print ("TypeError for ", parsed)
-        raise
+        print("TypeError for ", url)
+        return False
+
+
+# functions for simHash, might move to a separate file later
+def get_8bit_hash(word: str) -> str:
+    """
+    Grabs the 8bit hash of a certain word, and returns a string containing the 8-bit binary
+    string representing the word.
+    """
+    # returns the word as binary data
+    hash_bytes = hashlib.md5(word.encode("utf-8")).digest()
+    # takes first byte out of the 16 byte digest
+    byte_value = hash_bytes[0]
+    # 08b converts the value into 8-bit binary string
+    return f'{byte_value:08b}'
+def hash_text(text: str) -> dict[str, str]:
+    """ Hashes the full text, and returns a dictionary containing each word's unique hash"""
+    punctuation = "'!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
+    # translate strips out unwanted punctuation in O(n) time
+    cleaned_text = text.lower().translate(str.maketrans("", "", punctuation))
+    words = cleaned_text.split()
+
+    hashed_words = {}
+
+    for word in words:
+        if word in hashed_words:
+            pass
+        else:
+            hashed_words[word] = get_8bit_hash(word)
+    return hashed_words
+
+def count_raw_words(text: str) -> dict[str, int]:
+    """
+    Counts the frequency of each words in a text, and returns a dictionary containing the counts.
+    """
+    punctuation = "'!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
+    # translate strips out unwanted punctuation in O(n) time
+    cleaned_text = text.lower().translate(str.maketrans("","", punctuation))
+    words = cleaned_text.split()
+
+    word_counts = {}
+
+    for word in words:
+        word_counts[word] = word_counts.get(word, 0) + 1
+
+    return word_counts
+
+def compute_bitwise_vector(word_counts: dict[str, int], hashed_words: dict[str, str]):
+    """
+    Computes the bitwise vector for simHashing in O(n * B) time, where n is the
+    number of unique words and B is the bit length (8)
+    """
+
+    v = [0] * 8
+
+    for word, weight in word_counts.items():
+        # Integer hash, since hashed_words is a string
+        h = int(hashed_words[word])
+
+        for i in range(8):
+            # Checking if the ith bit from the right is 1, if it is then increment weight
+            if (h >> (7 - i)) & 1:
+                v[i] += weight
+            else:
+                v[i] -= weight
+    return v
