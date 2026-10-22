@@ -1,4 +1,5 @@
 import re
+import hashlib
 from urllib.parse import urlparse, urljoin
 from urllib.robotparser import RobotFileParser
 
@@ -119,3 +120,15 @@ def is_valid(url):
     except TypeError:
         print("TypeError for ", url)
         return False
+
+def get_8bit_hash(word: str) -> str:
+    """
+    Grabs the 8bit hash of a certain word, and returns a string containing the 8-bit binary
+    string representing the word.
+    """
+    # returns the word as binary data
+    hash_bytes = hashlib.md5(word.encode("utf-8")).digest()
+    # takes first byte out of the 16 byte digest
+    byte_value = hash_bytes[0]
+    # 08b converts the value into 8-bit binary string
+    return f'{byte_value:08b}'
