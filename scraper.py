@@ -43,15 +43,18 @@ def extract_next_links(url, resp):
             base_url = getattr(raw_response, "url", None) or resp.url or url
             # Parse the html
             html_parser = BeautifulSoup(raw_response.content, "html.parser") 
-                    # Add all links found on page to list
-                    for link in html_parser.find_all('a'):
-                        #url_list.append(urldefrag(link.get('href'))) # Defragment link
-                        
-                        absolute_url = urljoin(base_url, link.get('href', ''))
-                        absolute_url = urldefrag(absolute_url)[0]
+            # Add all links found on page to list
+            for link in html_parser.find_all('a'):
+                #url_list.append(urldefrag(link.get('href'))) # Defragment link
+                href = link.get('href', '').strip()
+                if href:
+                    absolute_url = urljoin(base_url, href)
+                    absolute_url = urldefrag(absolute_url)[0]
 
-                        if is_valid(absolute_url):
-                            url_list.append(absolute_url)
+                    if is_valid(absolute_url):
+                        url_list.append(absolute_url)
+
+            return list(set(url_list))
         # Otherwise, return empty list
         else:
             return []
@@ -72,21 +75,23 @@ def extract_next_links(url, resp):
         
         # Find the absolute URL of the redirect destination
         base_url = getattr(raw_response, "url", None) or resp.url or url
-        redirect_url = urljoin(base.url, location)
+        redirect_url = urljoin(base_url, location)
 
         # Remove the fragment
         redirect_url = urldefrag(redirect_url)[0]
 
         if is_valid(redirect_url):
             return [redirect_url]
-
+        
+        return []
+    return []
     # # Retry if server crashes
     # elif (resp.status in {408, 409, 500, 501, 503, 504}):
     #     # Retry
     # # Record errors and continue crawling 
     # else:
     #     # Record errors and continue with next link
-    return url_list
+    
 
 def is_allowed_by_bots(url, user_agent = '*'):
     """
