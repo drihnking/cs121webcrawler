@@ -121,6 +121,8 @@ def is_valid(url):
         print("TypeError for ", url)
         return False
 
+
+# functions for simHash, might move to a separate file later
 def get_8bit_hash(word: str) -> str:
     """
     Grabs the 8bit hash of a certain word, and returns a string containing the 8-bit binary
@@ -163,3 +165,23 @@ def count_raw_words(text: str) -> dict[str, int]:
         word_counts[word] = word_counts.get(word, 0) + 1
 
     return word_counts
+
+def compute_bitwise_vector(word_counts: dict[str, int], hashed_words: dict[str, str]):
+    """
+    Computes the bitwise vector for simHashing in O(n * B) time, where n is the
+    number of unique words and B is the bit length (8)
+    """
+
+    v = [0] * 8
+
+    for word, weight in word_counts.items():
+        # Integer hash, since hashed_words is a string
+        h = int(hashed_words[word])
+
+        for i in range(8):
+            # Checking if the ith bit from the right is 1, if it is then increment weight
+            if (h >> (7 - i)) & 1:
+                v[i] += weight
+            else:
+                v[i] -= weight
+    return v
