@@ -1,4 +1,6 @@
 import re
+import hashlib
+
 from urllib.parse import urlparse, urljoin, urldefrag, urlsplit
 from urllib.robotparser import RobotFileParser
 from bs4 import BeautifulSoup
@@ -143,3 +145,68 @@ def is_valid(url):
     except TypeError:
         print("TypeError for ", url)
         return False
+
+
+# functions for simHash, might move to a separate file later
+def get_8bit_hash(word: str) -> str:
+    """
+    Grabs the 8bit hash of a certain word, and returns a string containing the 8-bit binary
+    string representing the word.
+    """
+    # returns the word as binary data
+    hash_bytes = hashlib.md5(word.encode("utf-8")).digest()
+    # takes first byte out of the 16 byte digest
+    byte_value = hash_bytes[0]
+    # 08b converts the value into 8-bit binary string
+    return f'{byte_value:08b}'
+def hash_text(text: str) -> dict[str, str]:
+    """ Hashes the full text, and returns a dictionary containing each word's unique hash"""
+    punctuation = "'!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
+    # translate strips out unwanted punctuation in O(n) time
+    cleaned_text = text.lower().translate(str.maketrans("", "", punctuation))
+    words = cleaned_text.split()
+
+    hashed_words = {}
+
+    for word in words:
+        if word in hashed_words:
+            pass
+        else:
+            hashed_words[word] = get_8bit_hash(word)
+    return hashed_words
+
+def count_raw_words(text: str) -> dict[str, int]:
+    """
+    Counts the frequency of each words in a text, and returns a dictionary containing the counts.
+    """
+    punctuation = "'!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
+    # translate strips out unwanted punctuation in O(n) time
+    cleaned_text = text.lower().translate(str.maketrans("","", punctuation))
+    words = cleaned_text.split()
+
+    word_counts = {}
+
+    for word in words:
+        word_counts[word] = word_counts.get(word, 0) + 1
+
+    return word_counts
+
+def compute_bitwise_vector(word_counts: dict[str, int], hashed_words: dict[str, str]):
+    """
+    Computes the bitwise vector for simHashing in O(n * B) time, where n is the
+    number of unique words and B is the bit length (8)
+    """
+
+    v = [0] * 8
+
+    for word, weight in word_counts.items():
+        # Integer hash, since hashed_words is a string
+        h = int(hashed_words[word])
+
+        for i in range(8):
+            # Checking if the ith bit from the right is 1, if it is then increment weight
+            if (h >> (7 - i)) & 1:
+                v[i] += weight
+            else:
+                v[i] -= weight
+    return v
