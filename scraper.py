@@ -8,7 +8,7 @@ from bs4 import BeautifulSoup
 # Cache dictionary to store rfp instances per domain
 ROBOTS_CACHE = {}
 def scraper(url, resp):
-    if not resp or resp.status != 200 or not resp.raw_response or not resp.raw_response.content:
+    if not resp or not resp.raw_response or not resp.raw_response.content:
         return []
 
     return extract_next_links(url, resp)
@@ -104,13 +104,16 @@ def is_allowed_by_bots(url, user_agent = '*'):
             rfp.set_url(robots_url)
             try:
                 rfp.read()
+                ROBOTS_CACHE[domain] = rfp
             except Exception:
                 # if robots.txt does not load, default to that the site allows us to crawl
-                pass
+                ROBOTS_CACHE[domain] = None
             ROBOTS_CACHE[domain] = rfp
 
         # return permission check using cached RobotFileParser
-        return ROBOTS_CACHE[domain].can_fetch(user_agent, url)
+        if ROBOTS_CACHE[domain] is not None:
+            return ROBOTS_CACHE[domain].can_fetch(user_agent, url)
+        return True
     except Exception:
         # If there is an error, default to true to avoid blocking valid URLs
         return True
@@ -138,14 +141,12 @@ def is_valid(url):
             "stat.uci.edu"
         ]
 
-        if not any(
-            hostname == domain or hostname.endswith("." + domain)
-            for domain in allowed_domains
-        ):
-            return False
-
         # If robots.txt doesn't allow us
         if not is_allowed_by_bots(url):
+            return False
+
+        # Checks if URL's domain belongs to the specified allowed_domains
+        if not any(hostname == domain or (hostname or "").endswith("." + domain) for domain in allowed_domains):
             return False
 
         path = parsed.path.lower()
@@ -246,7 +247,7 @@ def compute_bitwise_vector(word_counts: dict[str, int], hashed_words: dict[str, 
 
     for word, weight in word_counts.items():
         # Integer hash, since hashed_words is a string
-        h = int(hashed_words[word])
+        h = int(hashed_words[word], 2)
 
         for i in range(8):
             # Checking if the ith bit from the right is 1, if it is then increment weight
