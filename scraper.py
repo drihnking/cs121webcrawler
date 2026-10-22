@@ -132,3 +132,34 @@ def get_8bit_hash(word: str) -> str:
     byte_value = hash_bytes[0]
     # 08b converts the value into 8-bit binary string
     return f'{byte_value:08b}'
+def hash_text(text: str) -> dict[str, str]:
+    """ Hashes the full text, and returns a dictionary containing each word's unique hash"""
+    punctuation = "'!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
+    # translate strips out unwanted punctuation in O(n) time
+    cleaned_text = text.lower().translate(str.maketrans("", "", punctuation))
+    words = cleaned_text.split()
+
+    hashed_words = {}
+
+    for word in words:
+        if word in hashed_words:
+            pass
+        else:
+            hashed_words[word] = get_8bit_hash(word)
+    return hashed_words
+
+def count_raw_words(text: str) -> dict[str, int]:
+    """
+    Counts the frequency of each words in a text, and returns a dictionary containing the counts.
+    """
+    punctuation = "'!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
+    # translate strips out unwanted punctuation in O(n) time
+    cleaned_text = text.lower().translate(str.maketrans("","", punctuation))
+    words = cleaned_text.split()
+
+    word_counts = {}
+
+    for word in words:
+        word_counts[word] = word_counts.get(word, 0) + 1
+
+    return word_counts
