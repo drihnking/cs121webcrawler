@@ -23,7 +23,7 @@ def extract_next_links(url, resp):
     
     url_list = list()
 
-    # Page request succeeds
+    # Page requested properly
     if resp.status==200:
         # Only read contents if it is an HTML
         url_path = urlsplit(url, allow_fragments=False).path
