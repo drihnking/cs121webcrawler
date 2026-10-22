@@ -16,6 +16,29 @@ def extract_next_links(url, resp):
     #         resp.raw_response.url: the url, again
     #         resp.raw_response.content: the content of the page!
     # Return a list with the hyperlinks (as strings) scrapped from resp.raw_response.content
+    
+    links = []
+    # Handling errors when status code != 200
+    if (resp.status != 200)
+    {
+        # Detect redirects
+        if (resp.status in {301, 302, 303, 307})
+        {
+            # Follow redirect and index url
+        }
+        # Retry if server crashes
+        elif (resp.status in {408, 409, 500, 501, 503, 504})
+        {
+            # Retry
+        }
+        # Record errors and continue crawling 
+        else
+        {
+            # Record errors and continue with next link
+        }
+
+    }
+    
     return list()
 
 def is_valid(url):
