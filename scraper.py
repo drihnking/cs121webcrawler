@@ -1,6 +1,7 @@
 import re
 import hashlib
 
+from urllib.error import URLError, HTTPError
 from urllib.parse import urlparse, urljoin, urldefrag, urlsplit
 from urllib.robotparser import RobotFileParser
 from bs4 import BeautifulSoup
@@ -105,16 +106,16 @@ def is_allowed_by_bots(url, user_agent = '*'):
             try:
                 rfp.read()
                 ROBOTS_CACHE[domain] = rfp
-            except Exception:
+            # Specifically catches web request timeouts, HTTP failures, connection issues, or URL parsing errors
+            except (URLError, HTTPError, OSError, ValueError):
                 # if robots.txt does not load, default to that the site allows us to crawl
                 ROBOTS_CACHE[domain] = None
-            ROBOTS_CACHE[domain] = rfp
 
         # return permission check using cached RobotFileParser
         if ROBOTS_CACHE[domain] is not None:
             return ROBOTS_CACHE[domain].can_fetch(user_agent, url)
         return True
-    except Exception:
+    except (URLError, HTTPError, OSError, ValueError):
         # If there is an error, default to true to avoid blocking valid URLs
         return True
 
