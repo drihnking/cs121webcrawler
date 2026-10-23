@@ -2,10 +2,11 @@ import re
 import hashlib
 
 from urllib.error import URLError, HTTPError
-from urllib.parse import urlparse, urljoin, urldefrag, urlsplit
+from urllib.parse import urlparse, urljoin, urldefrag, urlsplit, parse_qsl
 from urllib.robotparser import RobotFileParser
 from bs4 import BeautifulSoup
-from collections import Counter
+from collections import Counter, defaultdict
+
 # Global set to store seen 8-bit fingerprints across the crawl
 SIMHASHES = set()
 # Cache dictionary to store rfp instances per domain
@@ -36,6 +37,11 @@ STOP_WORDS = {
     "where", "where's", "which", "while", "who", "who's", "whom", "why", "why's", "with", "won't",
     "would", "wouldn't", "you", "you'd", "you'll", "you're", "you've", "your", "yours", "yourself", "yourselves"
 }
+
+# URL patterns and pattern limit
+URL_PATTERN_URLS = defaultdict(set)
+URL_PATTERN_LIMIT = 3
+
 def scraper(url, resp):
     if not resp or not resp.raw_response or not resp.raw_response.content:
         return []
@@ -151,8 +157,6 @@ def extract_next_links(url, resp):
 
     return []
 
-
-
 def is_allowed_by_bots(url, user_agent = '*'):
     """
     Helper function to get robots.txt for a domain, then see if the URL can be crawled
@@ -182,6 +186,25 @@ def is_allowed_by_bots(url, user_agent = '*'):
         # If there is an error, default to true to avoid blocking valid URLs
         return True
 
+def get_url_pattern(url):
+    """
+    Groups URLs with the same host, path structure,
+    and query parameter names.
+    """
+    parsed = urlparse(url)
+
+    # Replace numeric path components with a placeholder
+    path_pattern = re.sub(r"/\d+(?=/|$)", "/<id>", parsed.path.lower())
+
+    # Extract and normalize query parameter names from URL
+    # query_keys = tuple(sorted(
+    #     key.lower() for key, _ in parse_qsl(parsed.query, keep_blank_values=True)
+    # ))
+
+    return (
+        (parsed.hostname or "").lower(),
+        path_pattern
+    )
 
 def is_valid(url):
     # Decide whether to crawl this url or not. 
@@ -252,6 +275,16 @@ def is_valid(url):
             path
         ):
             return False
+
+        # Trap detection based on repeated/similar URL patterns
+        if parsed.query:
+            pattern = get_url_pattern(url)
+            normalized_url = urldefrag(url)[0]
+
+            URL_PATTERN_URLS[pattern].add(normalized_url)
+            
+            if len(URL_PATTERN_URLS[pattern]) > URL_PATTERN_LIMIT:
+                return False
 
         return True
 
