@@ -4,6 +4,7 @@ import hashlib
 from urllib.error import URLError, HTTPError
 from urllib.parse import urlparse, urljoin, urldefrag, urlsplit
 from urllib.robotparser import RobotFileParser
+from urllib.parse import urlparse, parse_qsl
 from bs4 import BeautifulSoup
 from collections import Counter
 # Global set to store seen 8-bit fingerprints across the crawl
@@ -205,6 +206,17 @@ def is_valid(url):
                 "tab_files=",
                 "tab_details="
              )): return False
+        # AVOID combinatorial filter URLs on ICS listing pages
+        if parsed.hostname == "ics.uci.edu":
+            if parsed.path.rstrip("/") in (
+                "/happening/news",
+                "/people"
+            ):
+                if any(
+                    name.startswith("filter[")
+                    for name, value in parse_qsl(parsed.query)
+                ):
+                    return False
         if parsed.scheme not in {"http", "https"}:
             return False
 
