@@ -6,8 +6,36 @@ from urllib.parse import urlparse, urljoin, urldefrag, urlsplit
 from urllib.robotparser import RobotFileParser
 from bs4 import BeautifulSoup
 
+# Global set to store seen 8-bit fingerprints across the crawl
+SIMHASHES = set()
 # Cache dictionary to store rfp instances per domain
 ROBOTS_CACHE = {}
+# 1. Unique URLs found
+UNIQUE_URLS = set()
+# 2. Longest page tracking
+LONGEST_PAGE = ("", 0)
+# 3. Frequency counter for overall words
+WORD_FREQUENCIES = Counter()
+# 4. Dictionary mapping subdomains to sets of unique pages
+SUBDOMAIN_PAGE_MAP = {}
+# English stop words
+STOP_WORDS = {
+    "a", "about", "above", "after", "again", "against", "all", "am", "an", "and", "any", "are", "aren't",
+    "as", "at", "be", "because", "been", "before", "being", "below", "between", "both", "but", "by",
+    "can't", "cannot", "could", "couldn't", "did", "didn't", "do", "does", "doesn't", "doing", "don't",
+    "down", "during", "each", "few", "for", "from", "further", "had", "hadn't", "has", "hasn't", "have",
+    "haven't", "having", "he", "he'd", "he'll", "he's", "her", "here", "here's", "hers", "herself",
+    "him", "himself", "his", "how", "how's", "i", "i'd", "i'll", "i'm", "i've", "if", "in", "into", "is",
+    "isn't", "it", "it's", "its", "itself", "let's", "me", "more", "most", "mustn't", "my", "myself",
+    "no", "nor", "not", "of", "off", "on", "once", "only", "or", "other", "ought", "our", "ours",
+    "ourselves", "out", "over", "own", "same", "shan't", "she", "she'd", "she'll", "she's", "should",
+    "shouldn't", "so", "some", "such", "than", "that", "that's", "the", "their", "theirs", "them",
+    "themselves", "then", "there", "there's", "these", "they", "they'd", "they'll", "they're",
+    "they've", "this", "those", "through", "to", "too", "under", "until", "up", "very", "was", "wasn't",
+    "we", "we'd", "we'll", "we're", "we've", "were", "weren't", "what", "what's", "when", "when's",
+    "where", "where's", "which", "while", "who", "who's", "whom", "why", "why's", "with", "won't",
+    "would", "wouldn't", "you", "you'd", "you'll", "you're", "you've", "your", "yours", "yourself", "yourselves"
+}
 def scraper(url, resp):
     if not resp or not resp.raw_response or not resp.raw_response.content:
         return []
@@ -38,9 +66,42 @@ def extract_next_links(url, resp):
         # Determine the base URL for resolving relative links, prioritizing the raw
         # response URL over response or request URL
         base_url = getattr(raw_response, "url", None) or resp.url or url
+        clean_url = urldefrag(base_url)[0]
+
+        # Tracking for Q1 in deliverables
+        UNIQUE_URLS.add(clean_url)
+        # Subdomain tracking for ics.uci.edu for Q4 in deliverables
+        parsed_url = urlparse(clean_url)
+        hostname = parsed_url.hostname or ""
+        if hostname.endswith(".ics.uci.edu") or hostname == "ics.uci.edu":
+            subdomain_key = f'{parsed_url.scheme}://{hostname}'
+            # Not in the map yet, create a set to keep track of unique subdomains.
+            if subdomain_key not in SUBDOMAIN_PAGE_MAP:
+                SUBDOMAIN_PAGE_MAP[subdomain_key] = set()
+            SUBDOMAIN_PAGE_MAP[subdomain_key].add(clean_url)
+
 
         # Parse HTML body content using BeautifulSoup and Python's build-in html.parser function
         html_parser = BeautifulSoup(raw_response.content, "html.parser")
+
+        # Get plain text from HTML and check if fingerprint matches a previously seen page
+        page_text = html_parser.get_text()
+        if is_duplicate_page(page_text):
+            return []
+
+        # Clean text to extract words in O(n) time
+        punctuation = "'!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
+        cleaned_text = page_text.lower().translate(str.maketrans("","",punctuation))
+        words = [w for w in cleaned_text.split() if len(w) > 1]
+
+        # Check for longest page for Q2 in deliverables
+        word_count = len(words)
+        if word_count > LONGEST_PAGE[1]:
+            LONGEST_PAGE = (clean_url, word_count)
+
+        # Filter stop words and record frequencies across pages for Q3 in deliverables
+        non_stop_words = [w for w in words if w not in STOP_WORDS]
+        WORD_FREQUENCIES.update(non_stop_words)
 
         # Iterate over all anchor tags (<a>) found in the parsed HTML document
         for link in html_parser.find_all('a'):
@@ -88,7 +149,7 @@ def extract_next_links(url, resp):
 
     return []
 
-    
+
 
 def is_allowed_by_bots(url, user_agent = '*'):
     """
@@ -193,6 +254,54 @@ def is_valid(url):
         print("TypeError for ", url)
         return False
 
+def is_duplicate_page(page_text: str) -> bool:
+    """
+    Detects webpage duplicates using SimHash fingerprinting
+    Exact and near-duplicates will produce identical or nearly identical fingerprints.
+    Threshold: Hamming distance <= 1 (will be 0 for exact matches)
+    """
+
+    if not page_text or not page_text.strip():
+        return True
+    hashed_words = hash_text(page_text)
+    word_counts = count_raw_words(page_text)
+    vector = compute_bitwise_vector(word_counts, hashed_words)
+
+    # Convert the bitwise vector to binary string fingerprint
+    fingerprint = "".join("1" if x > 0 else "0" for x in vector)
+
+    # Check Hamming distance against previously seen fingerprints
+    for seen_fp in SIMHASHES:
+        hamming_distance = sum(b1 != b2 for b1, b2 in zip(fingerprint, seen_fp))
+        # Distance = 0 if exact duplicate, <= 1 is near-duplicate
+        if hamming_distance <= 1:
+            return True
+
+    # If unique fingerprint, then store it and return false.
+    SIMHASHES.add(fingerprint)
+    return False
+
+def print_crawl_analytics():
+    print("=" * 50)
+    print("CRAWL SUMMARY & ANSWERS")
+    print("=" * 50)
+
+    # Q1: Total Unique Pages
+    print(f"\n1. Total Unique Pages Found: {len(UNIQUE_URLS)}")
+
+    # Q2: Longest Page
+    print(f"\n2. Longest Page: {LONGEST_PAGE[0]} with {LONGEST_PAGE[1]} words")
+
+    # Q3: 50 Most Common Words
+    print("\n3. Top 50 Most Common Words (excluding stop words):")
+    for rank, (word, freq) in enumerate(WORD_FREQUENCIES.most_common(50), 1):
+        print(f"   {rank}. {word}: {freq}")
+
+    # Q4: Subdomains in ics.uci.edu
+    print("\n4. Subdomains in ics.uci.edu (alphabetical):")
+    for subdomain in sorted(SUBDOMAIN_PAGE_MAP.keys()):
+        count = len(SUBDOMAIN_PAGE_MAP[subdomain])
+        print(f"   {subdomain}, {count}")
 
 # functions for simHash, might move to a separate file later
 def get_8bit_hash(word: str) -> str:
