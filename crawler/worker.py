@@ -1,34 +1,45 @@
 from threading import Thread
-
 from inspect import getsource
+
 from utils.download import download
 from utils import get_logger
 import scraper
-import time
 
 
 class Worker(Thread):
+    """repeatedly fetch queued URls  and hand extracted links to the frontier"""
     def __init__(self, worker_id, config, frontier):
         self.logger = get_logger(f"Worker-{worker_id}", "Worker")
         self.config = config
         self.frontier = frontier
-        # basic check for requests in scraper
-        assert {getsource(scraper).find(req) for req in {"from requests import", "import requests"}} == {-1}, "Do not use requests in scraper.py"
-        assert {getsource(scraper).find(req) for req in {"from urllib.request import", "import urllib.request"}} == {-1}, "Do not use urllib.request in scraper.py"
-        super().__init__(daemon=True)
-        
+        # scraper can't fetch directly via requests or urllib
+	assert {getsource(scraper).find(req) for req in
+		{"from requests import", "import requests"}} == {-1}
+	assert {getsource(scraper).find(req) for req in
+		{"from urllib.request import", "import urllib.request"}} == {-1}
+	super().__init__(daemon=True)
     def run(self):
+	"""main worker loop where it always mark a URL finished even after logged errors"""
         while True:
-            tbd_url = self.frontier.get_tbd_url()
-            if not tbd_url:
-                self.logger.info("Frontier is empty. Stopping Crawler.")
-                break
-            resp = download(tbd_url, self.config, self.logger)
-            self.logger.info(
-                f"Downloaded {tbd_url}, status <{resp.status}>, "
-                f"using cache {self.config.cache_server}.")
-            scraped_urls = scraper.scraper(tbd_url, resp)
-            for scraped_url in scraped_urls:
-                self.frontier.add_url(scraped_url)
-            self.frontier.mark_url_complete(tbd_url)
-            time.sleep(self.config.time_delay)
+	# threads would pull unique work from the shared frontier, safely
+	    url = self.frontier.get_tbd_url()
+	    if url is None:
+		self.logger.info("Frontier is empty. Worker is stopping.")
+		return
+            try:
+                # enforce spacing between requests before using the course downloader
+		self.frontier.wait_for_domain(url)
+		resp = download(url, self.config, self.logger)
+		self.logger.info("Downloaded %s, status <$s>", url, resp.status)
+		# since shared scraper stats & fingerprint dupes are global
+		# it'll serialize the entire scraper call to avoid mutations happening simultaneously
+		with _scraper_lock:
+			found = scraper.scraper(url, resp)
+		# add_url would delete dupes of discovered links while holding its lock
+		for link in found:
+			self.frontier.add_url(link)
+	    except Exception:
+		self.logger.exception("Failed to process %s", url)
+	    finally:
+		# oustanding must reach 0 for a clean shutdown
+		self.frontier.mark_url_complete(url)

@@ -53,6 +53,8 @@ def extract_next_links(url, resp):
     #         resp.raw_response.content: the content of the page!
     # Return a list with the hyperlinks (as strings) scrapped from resp.raw_response.content
     
+    # updates the overall longest-page tupe, so therefore can't be a local variable
+    global LONGEST_PAGE
     url_list = []
 
     # Page requested properly (Successful response)
@@ -202,10 +204,6 @@ def is_valid(url):
             "informatics.uci.edu",
             "stat.uci.edu"
         ]
-
-        # If robots.txt doesn't allow us
-        if not is_allowed_by_bots(url):
-            return False
 
         # Checks if URL's domain belongs to the specified allowed_domains
         if not any(hostname == domain or (hostname or "").endswith("." + domain) for domain in allowed_domains):
