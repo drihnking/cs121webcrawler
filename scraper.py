@@ -5,7 +5,7 @@ from urllib.error import URLError, HTTPError
 from urllib.parse import urlparse, urljoin, urldefrag, urlsplit
 from urllib.robotparser import RobotFileParser
 from bs4 import BeautifulSoup
-
+from collections import Counter
 # Global set to store seen 8-bit fingerprints across the crawl
 SIMHASHES = set()
 # Cache dictionary to store rfp instances per domain
