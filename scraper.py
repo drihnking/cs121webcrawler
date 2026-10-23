@@ -39,8 +39,38 @@ STOP_WORDS = {
 }
 
 # URL patterns and pattern limit
-URL_PATTERN_URLS = defaultdict(set)
-URL_PATTERN_LIMIT = 3
+# URL_PATTERN_URLS = defaultdict(set)
+# URL_PATTERN_LIMIT = 3
+
+URL_PATTERN_VARIANTS = defaultdict(set)
+
+# One meaningful query variant is allowed for each host/path.
+MAX_QUERY_VARIANTS = 1
+
+# Generic parameters commonly used for UI, media, navigation,
+# sorting, filtering, and session state.
+UI_QUERY_KEYS = {
+    "action",
+    "cmd",
+    "do",
+    "edit",
+    "filter",
+    "image",
+    "idx",
+    "login",
+    "mode",
+    "namespace",
+    "ns",
+    "page",
+    "replytocom",
+    "search",
+    "sort",
+    "tab",
+    "tab_details",
+    "tab_files",
+    "view",
+}
+
 
 def scraper(url, resp):
     if not resp or not resp.raw_response or not resp.raw_response.content:
@@ -277,14 +307,49 @@ def is_valid(url):
             return False
 
         # Trap detection based on repeated/similar URL patterns
-        if parsed.query:
-            pattern = get_url_pattern(url)
-            normalized_url = urldefrag(url)[0]
+                # Apply query-based trap detection.
+        query_pairs = parse_qsl(
+            parsed.query,
+            keep_blank_values=True,
+        )
 
-            URL_PATTERN_URLS[pattern].add(normalized_url)
+        # Base paths without a query are allowed.
+        if not query_pairs:
+            return True
+
+        query_keys = {
+            key.lower()
+            for key, _ in query_pairs
+            if key
+        }
+
+        # Reject queries made entirely of generic UI/media/navigation
+        # parameters. This catches combinations such as:
+        # ?do=media&tab_files=files&tab_details=view&image=...
+        if query_keys and query_keys.issubset(UI_QUERY_KEYS):
+            return False
+
+        pattern = get_url_pattern(url)
+        normalized_url = urldefrag(url)[0]
+        variants = URL_PATTERN_VARIANTS[pattern]
+
+        # Do not count the same URL repeatedly.
+        if normalized_url in variants:
+            return False
+
+        # Allow one meaningful query variant, then reject later variants.
+        if len(variants) >= MAX_QUERY_VARIANTS:
+            return False
+
+        variants.add(normalized_url)
+        # if parsed.query:
+        #     pattern = get_url_pattern(url)
+        #     normalized_url = urldefrag(url)[0]
+
+        #     URL_PATTERN_URLS[pattern].add(normalized_url)
             
-            if len(URL_PATTERN_URLS[pattern]) > URL_PATTERN_LIMIT:
-                return False
+        #     if len(URL_PATTERN_URLS[pattern]) > URL_PATTERN_LIMIT:
+        #         return False
 
         return True
 
