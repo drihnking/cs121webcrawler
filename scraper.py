@@ -197,6 +197,14 @@ def is_valid(url):
 
         parsed = urlparse(url)
 
+        if parsed.hostname == "wiki.ics.uci.edu":
+            query = parsed.query.lower()
+
+            if any(param in query for param in (
+                "do=media",
+                "tab_files=",
+                "tab_details="
+             )): return False
         if parsed.scheme not in {"http", "https"}:
             return False
 
