@@ -10,8 +10,16 @@ def main(config_file, restart):
     cparser = ConfigParser()
     cparser.read(config_file)
     config = Config(cparser)
+    # DEBUG
+    print("DEBUG: Starting server registration", flush=True)
+
     config.cache_server = get_cache_server(config, restart)
+
+    print("DEBUG: Server registration completed", flush=True)
+
     crawler = Crawler(config, restart)
+
+    print("DEBUG: Frontier initialized", flush=True)
     try:
         crawler.start()
     finally:
