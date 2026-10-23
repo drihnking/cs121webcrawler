@@ -186,6 +186,13 @@ def is_valid(url):
     # If you decide to crawl it, return True; otherwise return False.
     # There are already some conditions that return False.
     try:
+        #Ensure the URL has only valid ASCII characters
+        if not url.isascii():
+            return False
+
+        if len(url) > 200 or "<html" in url.lower() or "<body" in url.lower():
+            return False
+
         parsed = urlparse(url)
 
         if parsed.scheme not in {"http", "https"}:
