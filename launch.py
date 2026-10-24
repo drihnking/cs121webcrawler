@@ -4,7 +4,7 @@ from argparse import ArgumentParser
 from utils.server_registration import get_cache_server
 from utils.config import Config
 from crawler import Crawler
-from scraper import print_crawl_analytics
+from scraper import print_crawl_analytics, load_analytics, save_analytics
 
 def main(config_file, restart):
     cparser = ConfigParser()
@@ -17,6 +17,8 @@ def main(config_file, restart):
 
     print("DEBUG: Server registration completed", flush=True)
 
+    # restore the previous crawl statistics before starting the workers
+    load_analytics(restart)
     crawler = Crawler(config, restart)
 
     print("DEBUG: Frontier initialized", flush=True)
@@ -24,6 +26,7 @@ def main(config_file, restart):
         crawler.start()
     finally:
         # Prints deliverable data when crawling is done or stopped by Ctrl + C
+        save_analytics()
         print_crawl_analytics()
 
 if __name__ == "__main__":

@@ -1,6 +1,9 @@
 import re
 import hashlib
 
+import os
+import pickle
+
 from urllib.error import URLError, HTTPError
 from urllib.parse import urlparse, urljoin, urldefrag, urlsplit
 from urllib.robotparser import RobotFileParser
@@ -386,3 +389,67 @@ def compute_bitwise_vector(word_counts: dict[str, int], hashed_words: dict[str, 
             else:
                 v[i] -= weight
     return v
+
+ANALYTICS_FILE = "crawl_analytics.pkl"
+
+def save_analytics():
+    # keep all the crawl statistics together so we can save them in one file
+    data = {
+        "UNIQUE_URLS": UNIQUE_URLS,
+        "LONGEST_PAGE": LONGEST_PAGE,
+        "WORD_FREQUENCIES": WORD_FREQUENCIES,
+        "SUBDOMAIN_PAGE_MAP": SUBDOMAIN_PAGE_MAP,
+        "SIMHASHES": SIMHASHES,
+    }
+
+    # write to a temporary file first so an interrupted save
+    # doesn't leave us with a partially written analytics file
+    temp_file = ANALYTICS_FILE + ".tmp"
+
+    with open(temp_file, "wb") as file:
+        pickle.dump(data, file)
+        file.flush()
+        os.fsync(file.fileno())
+
+    # replace the old file only after the new data has been saved
+    os.replace(temp_file, ANALYTICS_FILE)
+
+
+def load_analytics(restart=False):
+    global LONGEST_PAGE
+
+    # a fresh crawl should start with empty statistics
+    if restart:
+        UNIQUE_URLS.clear()
+        LONGEST_PAGE = ("", 0)
+        WORD_FREQUENCIES.clear()
+        SUBDOMAIN_PAGE_MAP.clear()
+        SIMHASHES.clear()
+        return
+
+    # If this is the first run, there won't be anything to load yet
+    if not os.path.exists(ANALYTICS_FILE):
+        return
+
+    # Load the saved statistics from the previous run
+    with open(ANALYTICS_FILE, "rb") as file:
+        data = pickle.load(file)
+
+    # Restore the unique URLs we already counted
+    UNIQUE_URLS.clear()
+    UNIQUE_URLS.update(data["UNIQUE_URLS"])
+
+    # Restore the longest page found so far
+    LONGEST_PAGE = data["LONGEST_PAGE"]
+
+    # Restore the word frequencies
+    WORD_FREQUENCIES.clear()
+    WORD_FREQUENCIES.update(data["WORD_FREQUENCIES"])
+
+    # Restore the subdomain page counts
+    SUBDOMAIN_PAGE_MAP.clear()
+    SUBDOMAIN_PAGE_MAP.update(data["SUBDOMAIN_PAGE_MAP"])
+
+    # Restore the fingerprints used to detect similar pages
+    SIMHASHES.clear()
+    SIMHASHES.update(data["SIMHASHES"])
