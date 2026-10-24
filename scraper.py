@@ -2,11 +2,12 @@ import re
 import hashlib
 
 from urllib.error import URLError, HTTPError
-from urllib.parse import urlparse, urljoin, urldefrag, urlsplit
+from urllib.parse import urlparse, urljoin, urldefrag, urlsplit, parse_qsl
 from urllib.robotparser import RobotFileParser
 from urllib.parse import urlparse, parse_qsl
 from bs4 import BeautifulSoup
-from collections import Counter
+from collections import Counter, defaultdict
+
 # Global set to store seen 8-bit fingerprints across the crawl
 SIMHASHES = set()
 # Cache dictionary to store rfp instances per domain
@@ -37,6 +38,41 @@ STOP_WORDS = {
     "where", "where's", "which", "while", "who", "who's", "whom", "why", "why's", "with", "won't",
     "would", "wouldn't", "you", "you'd", "you'll", "you're", "you've", "your", "yours", "yourself", "yourselves"
 }
+
+# URL patterns and pattern limit
+# URL_PATTERN_URLS = defaultdict(set)
+# URL_PATTERN_LIMIT = 3
+
+URL_PATTERN_VARIANTS = defaultdict(set)
+
+# One meaningful query variant is allowed for each host/path.
+MAX_QUERY_VARIANTS = 1
+
+# Generic parameters commonly used for UI, media, navigation,
+# sorting, filtering, and session state.
+UI_QUERY_KEYS = {
+    "action",
+    "cmd",
+    "do",
+    "edit",
+    "filter",
+    "image",
+    "idx",
+    "login",
+    "mode",
+    "namespace",
+    "ns",
+    "page",
+    "replytocom",
+    "search",
+    "sort",
+    "tab",
+    "tab_details",
+    "tab_files",
+    "view",
+}
+
+
 def scraper(url, resp):
     if not resp or not resp.raw_response or not resp.raw_response.content:
         return []
@@ -152,8 +188,6 @@ def extract_next_links(url, resp):
 
     return []
 
-
-
 def is_allowed_by_bots(url, user_agent = '*'):
     """
     Helper function to get robots.txt for a domain, then see if the URL can be crawled
@@ -183,6 +217,25 @@ def is_allowed_by_bots(url, user_agent = '*'):
         # If there is an error, default to true to avoid blocking valid URLs
         return True
 
+def get_url_pattern(url):
+    """
+    Groups URLs with the same host, path structure,
+    and query parameter names.
+    """
+    parsed = urlparse(url)
+
+    # Replace numeric path components with a placeholder
+    path_pattern = re.sub(r"/\d+(?=/|$)", "/<id>", parsed.path.lower())
+
+    # Extract and normalize query parameter names from URL
+    # query_keys = tuple(sorted(
+    #     key.lower() for key, _ in parse_qsl(parsed.query, keep_blank_values=True)
+    # ))
+
+    return (
+        (parsed.hostname or "").lower(),
+        path_pattern
+    )
 
 def is_valid(url):
     # Decide whether to crawl this url or not. 
@@ -272,6 +325,51 @@ def is_valid(url):
             path
         ):
             return False
+
+        # Trap detection based on repeated/similar URL patterns
+                # Apply query-based trap detection.
+        query_pairs = parse_qsl(
+            parsed.query,
+            keep_blank_values=True,
+        )
+
+        # Base paths without a query are allowed.
+        if not query_pairs:
+            return True
+
+        query_keys = {
+            key.lower()
+            for key, _ in query_pairs
+            if key
+        }
+
+        # Reject queries made entirely of generic UI/media/navigation
+        # parameters. This catches combinations such as:
+        # ?do=media&tab_files=files&tab_details=view&image=...
+        if query_keys and query_keys.issubset(UI_QUERY_KEYS):
+            return False
+
+        pattern = get_url_pattern(url)
+        normalized_url = urldefrag(url)[0]
+        variants = URL_PATTERN_VARIANTS[pattern]
+
+        # Do not count the same URL repeatedly.
+        if normalized_url in variants:
+            return False
+
+        # Allow one meaningful query variant, then reject later variants.
+        if len(variants) >= MAX_QUERY_VARIANTS:
+            return False
+
+        variants.add(normalized_url)
+        # if parsed.query:
+        #     pattern = get_url_pattern(url)
+        #     normalized_url = urldefrag(url)[0]
+
+        #     URL_PATTERN_URLS[pattern].add(normalized_url)
+            
+        #     if len(URL_PATTERN_URLS[pattern]) > URL_PATTERN_LIMIT:
+        #         return False
 
         return True
 
