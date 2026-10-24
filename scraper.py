@@ -1,12 +1,17 @@
 import re
 import hashlib
 
+import os
+import pickle
+
 from urllib.error import URLError, HTTPError
 from urllib.parse import urlparse, urljoin, urldefrag, urlsplit
 from urllib.robotparser import RobotFileParser
 from urllib.parse import urlparse, parse_qsl
 from bs4 import BeautifulSoup
 from collections import Counter
+
+MAX_BYTES = 5_000_000
 # Global set to store seen 8-bit fingerprints across the crawl
 SIMHASHES = set()
 # Cache dictionary to store rfp instances per domain
@@ -38,7 +43,7 @@ STOP_WORDS = {
     "would", "wouldn't", "you", "you'd", "you'll", "you're", "you've", "your", "yours", "yourself", "yourselves"
 }
 def scraper(url, resp):
-    if not resp or not resp.raw_response or not resp.raw_response.content:
+    if resp is None:
         return []
 
     return extract_next_links(url, resp)
@@ -71,6 +76,19 @@ def extract_next_links(url, resp):
         base_url = getattr(raw_response, "url", None) or resp.url or url
         clean_url = urldefrag(base_url)[0]
 
+        # check the final URL in case the request was redirected
+        if not is_valid(clean_url):
+            return []
+
+        # Only process HTML pages
+        ctype = raw_response.headers.get("Content-Type", "").lower()
+        if ctype and "html" not in ctype:
+            return []
+
+        # Skip unusually large responses
+        if len(raw_response.content) > MAX_BYTES:
+            return []
+
         # Tracking for Q1 in deliverables
         UNIQUE_URLS.add(clean_url)
         # Subdomain tracking for ics.uci.edu for Q4 in deliverables
@@ -89,22 +107,23 @@ def extract_next_links(url, resp):
 
         # Get plain text from HTML and check if fingerprint matches a previously seen page
         page_text = html_parser.get_text()
-        if is_duplicate_page(page_text):
-            return []
+        is_duplicate = is_duplicate_page(page_text)
 
         # Clean text to extract words in O(n) time
         punctuation = "'!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
-        cleaned_text = page_text.lower().translate(str.maketrans("","",punctuation))
-        words = [w for w in cleaned_text.split() if len(w) > 1]
 
-        # Check for longest page for Q2 in deliverables
-        word_count = len(words)
-        if word_count > LONGEST_PAGE[1]:
-            LONGEST_PAGE = (clean_url, word_count)
+        if not is_duplicate:
+            cleaned_text = page_text.lower().translate(str.maketrans("","",punctuation))
+            words = [w for w in re.findall(r"[a-z0-9]+(?:'[a-z0-9]+)*", page_text.lower()) if len(w) > 1]
 
-        # Filter stop words and record frequencies across pages for Q3 in deliverables
-        non_stop_words = [w for w in words if w not in STOP_WORDS]
-        WORD_FREQUENCIES.update(non_stop_words)
+            # Check for longest page for Q2 in deliverables
+            word_count = len(words)
+            if word_count > LONGEST_PAGE[1]:
+                LONGEST_PAGE = (clean_url, word_count)
+
+            # Filter stop words and record frequencies across pages for Q3 in deliverables
+            non_stop_words = [w for w in words if w not in STOP_WORDS]
+            WORD_FREQUENCIES.update(non_stop_words)
 
         # Iterate over all anchor tags (<a>) found in the parsed HTML document
         for link in html_parser.find_all('a'):
@@ -197,15 +216,19 @@ def is_valid(url):
             return False
 
         parsed = urlparse(url)
+        hostname = (parsed.hostname or "").lower()
 
-        if parsed.hostname == "wiki.ics.uci.edu":
-            query = parsed.query.lower()
+        # skip DokuWiki actions that generate many versions of the same page
+        if hostname == "wiki.ics.uci.edu":
+            params = parse_qsl(parsed.query, keep_blank_values=True)
 
-            if any(param in query for param in (
-                "do=media",
-                "tab_files=",
-                "tab_details="
-             )): return False
+            blocked_params = {
+                "rev", "idx", "oldid", "tab_files",
+                "tab_details", "do"
+            }
+
+            if any(name.lower() in blocked_params for name, value in params):
+                return False
         # AVOID combinatorial filter URLs on ICS listing pages
         if parsed.hostname == "ics.uci.edu":
             if parsed.path.rstrip("/") in (
@@ -240,10 +263,9 @@ def is_valid(url):
 
         # Handles infinite folder recursion traps (/a/b/a/b/a/b)
         path_segments = [seg for seg in path.split('/') if seg]
-        if len(path_segments) != len(set(path_segments)):
-            # If directory names repeat
+        # Allow a segment to appear twice, but block excessive repetition
+        if path_segments and max(Counter(path_segments).values()) >= 3:
             return False
-
         # Handles extremely deep paths
         if len(path_segments) > 10:
             return False
@@ -329,17 +351,11 @@ def print_crawl_analytics():
         print(f"   {subdomain}, {count}")
 
 # functions for simHash, might move to a separate file later
-def get_8bit_hash(word: str) -> str:
-    """
-    Grabs the 8bit hash of a certain word, and returns a string containing the 8-bit binary
-    string representing the word.
-    """
-    # returns the word as binary data
+def get_64bit_hash(word: str) -> str:
     hash_bytes = hashlib.md5(word.encode("utf-8")).digest()
-    # takes first byte out of the 16 byte digest
-    byte_value = hash_bytes[0]
-    # 08b converts the value into 8-bit binary string
-    return f'{byte_value:08b}'
+    hash_value = int.from_bytes(hash_bytes[:8], byteorder="big")
+    return f"{hash_value:064b}"
+
 def hash_text(text: str) -> dict[str, str]:
     """ Hashes the full text, and returns a dictionary containing each word's unique hash"""
     punctuation = "'!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
@@ -353,7 +369,7 @@ def hash_text(text: str) -> dict[str, str]:
         if word in hashed_words:
             pass
         else:
-            hashed_words[word] = get_8bit_hash(word)
+            hashed_words[word] = get_64bit_hash(word)
     return hashed_words
 
 def count_raw_words(text: str) -> dict[str, int]:
@@ -378,16 +394,80 @@ def compute_bitwise_vector(word_counts: dict[str, int], hashed_words: dict[str, 
     number of unique words and B is the bit length (8)
     """
 
-    v = [0] * 8
+    v = [0] * 64
 
     for word, weight in word_counts.items():
         # Integer hash, since hashed_words is a string
         h = int(hashed_words[word], 2)
 
-        for i in range(8):
+        for i in range(64):
             # Checking if the ith bit from the right is 1, if it is then increment weight
-            if (h >> (7 - i)) & 1:
+            if (h >> (63 - i)) & 1:
                 v[i] += weight
             else:
                 v[i] -= weight
     return v
+
+ANALYTICS_FILE = "crawl_analytics.pkl"
+
+def save_analytics():
+    # keep all the crawl statistics together so we can save them in one file
+    data = {
+        "UNIQUE_URLS": UNIQUE_URLS,
+        "LONGEST_PAGE": LONGEST_PAGE,
+        "WORD_FREQUENCIES": WORD_FREQUENCIES,
+        "SUBDOMAIN_PAGE_MAP": SUBDOMAIN_PAGE_MAP,
+        "SIMHASHES": SIMHASHES,
+    }
+
+    # write to a temporary file first so an interrupted save
+    # doesn't leave us with a partially written analytics file
+    temp_file = ANALYTICS_FILE + ".tmp"
+
+    with open(temp_file, "wb") as file:
+        pickle.dump(data, file)
+        file.flush()
+        os.fsync(file.fileno())
+
+    # replace the old file only after the new data has been saved
+    os.replace(temp_file, ANALYTICS_FILE)
+
+
+def load_analytics(restart=False):
+    global LONGEST_PAGE
+
+    # a fresh crawl should start with empty statistics
+    if restart:
+        UNIQUE_URLS.clear()
+        LONGEST_PAGE = ("", 0)
+        WORD_FREQUENCIES.clear()
+        SUBDOMAIN_PAGE_MAP.clear()
+        SIMHASHES.clear()
+        return
+
+    # If this is the first run, there won't be anything to load yet
+    if not os.path.exists(ANALYTICS_FILE):
+        return
+
+    # Load the saved statistics from the previous run
+    with open(ANALYTICS_FILE, "rb") as file:
+        data = pickle.load(file)
+
+    # Restore the unique URLs we already counted
+    UNIQUE_URLS.clear()
+    UNIQUE_URLS.update(data["UNIQUE_URLS"])
+
+    # Restore the longest page found so far
+    LONGEST_PAGE = data["LONGEST_PAGE"]
+
+    # Restore the word frequencies
+    WORD_FREQUENCIES.clear()
+    WORD_FREQUENCIES.update(data["WORD_FREQUENCIES"])
+
+    # Restore the subdomain page counts
+    SUBDOMAIN_PAGE_MAP.clear()
+    SUBDOMAIN_PAGE_MAP.update(data["SUBDOMAIN_PAGE_MAP"])
+
+    # Restore the fingerprints used to detect similar pages
+    SIMHASHES.clear()
+    SIMHASHES.update(data["SIMHASHES"])

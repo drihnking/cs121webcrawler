@@ -46,6 +46,7 @@ class Worker(Thread):
                 # it'll serialize the entire scraper call to avoid mutations happening simultaneously
                 with _scraper_lock:
                     found = scraper.scraper(url, resp)
+                    scraper.save_analytics()
 
                 # add_url would delete dupes of discovered links while holding its lock
                 for link in found:
