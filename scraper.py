@@ -10,6 +10,8 @@ from urllib.robotparser import RobotFileParser
 from urllib.parse import urlparse, parse_qsl
 from bs4 import BeautifulSoup
 from collections import Counter
+
+MAX_BYTES = 5_000_000
 # Global set to store seen 8-bit fingerprints across the crawl
 SIMHASHES = set()
 # Cache dictionary to store rfp instances per domain
@@ -41,7 +43,7 @@ STOP_WORDS = {
     "would", "wouldn't", "you", "you'd", "you'll", "you're", "you've", "your", "yours", "yourself", "yourselves"
 }
 def scraper(url, resp):
-    if not resp or not resp.raw_response or not resp.raw_response.content:
+    if resp is None:
         return []
 
     return extract_next_links(url, resp)
@@ -74,6 +76,19 @@ def extract_next_links(url, resp):
         base_url = getattr(raw_response, "url", None) or resp.url or url
         clean_url = urldefrag(base_url)[0]
 
+        # check the final URL in case the request was redirected
+        if not is_valid(clean_url):
+            return []
+
+        # Only process HTML pages
+        ctype = raw_response.headers.get("Content-Type", "").lower()
+        if ctype and "html" not in ctype:
+            return []
+
+        # Skip unusually large responses
+        if len(raw_response.content) > MAX_BYTES:
+            return []
+
         # Tracking for Q1 in deliverables
         UNIQUE_URLS.add(clean_url)
         # Subdomain tracking for ics.uci.edu for Q4 in deliverables
@@ -99,7 +114,7 @@ def extract_next_links(url, resp):
 
         if not is_duplicate:
             cleaned_text = page_text.lower().translate(str.maketrans("","",punctuation))
-            words = [w for w in cleaned_text.split() if len(w) > 1]
+            words = [w for w in re.findall(r"[a-z0-9]+(?:'[a-z0-9]+)*", page_text.lower()) if len(w) > 1]
 
             # Check for longest page for Q2 in deliverables
             word_count = len(words)
@@ -201,15 +216,19 @@ def is_valid(url):
             return False
 
         parsed = urlparse(url)
+        hostname = (parsed.hostname or "").lower()
 
-        if parsed.hostname == "wiki.ics.uci.edu":
-            query = parsed.query.lower()
+        # skip DokuWiki actions that generate many versions of the same page
+        if hostname == "wiki.ics.uci.edu":
+            params = parse_qsl(parsed.query, keep_blank_values=True)
 
-            if any(param in query for param in (
-                "do=media",
-                "tab_files=",
-                "tab_details="
-             )): return False
+            blocked_params = {
+                "rev", "idx", "oldid", "tab_files",
+                "tab_details", "do"
+            }
+
+            if any(name.lower() in blocked_params for name, value in params):
+                return False
         # AVOID combinatorial filter URLs on ICS listing pages
         if parsed.hostname == "ics.uci.edu":
             if parsed.path.rstrip("/") in (
@@ -244,10 +263,9 @@ def is_valid(url):
 
         # Handles infinite folder recursion traps (/a/b/a/b/a/b)
         path_segments = [seg for seg in path.split('/') if seg]
-        if len(path_segments) != len(set(path_segments)):
-            # If directory names repeat
+        # Allow a segment to appear twice, but block excessive repetition
+        if path_segments and max(Counter(path_segments).values()) >= 3:
             return False
-
         # Handles extremely deep paths
         if len(path_segments) > 10:
             return False
