@@ -89,22 +89,23 @@ def extract_next_links(url, resp):
 
         # Get plain text from HTML and check if fingerprint matches a previously seen page
         page_text = html_parser.get_text()
-        if is_duplicate_page(page_text):
-            return []
+        is_duplicate = is_duplicate_page(page_text)
 
         # Clean text to extract words in O(n) time
         punctuation = "'!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
-        cleaned_text = page_text.lower().translate(str.maketrans("","",punctuation))
-        words = [w for w in cleaned_text.split() if len(w) > 1]
 
-        # Check for longest page for Q2 in deliverables
-        word_count = len(words)
-        if word_count > LONGEST_PAGE[1]:
-            LONGEST_PAGE = (clean_url, word_count)
+        if not is_duplicate:
+            cleaned_text = page_text.lower().translate(str.maketrans("","",punctuation))
+            words = [w for w in cleaned_text.split() if len(w) > 1]
 
-        # Filter stop words and record frequencies across pages for Q3 in deliverables
-        non_stop_words = [w for w in words if w not in STOP_WORDS]
-        WORD_FREQUENCIES.update(non_stop_words)
+            # Check for longest page for Q2 in deliverables
+            word_count = len(words)
+            if word_count > LONGEST_PAGE[1]:
+                LONGEST_PAGE = (clean_url, word_count)
+
+            # Filter stop words and record frequencies across pages for Q3 in deliverables
+            non_stop_words = [w for w in words if w not in STOP_WORDS]
+            WORD_FREQUENCIES.update(non_stop_words)
 
         # Iterate over all anchor tags (<a>) found in the parsed HTML document
         for link in html_parser.find_all('a'):
@@ -329,17 +330,11 @@ def print_crawl_analytics():
         print(f"   {subdomain}, {count}")
 
 # functions for simHash, might move to a separate file later
-def get_8bit_hash(word: str) -> str:
-    """
-    Grabs the 8bit hash of a certain word, and returns a string containing the 8-bit binary
-    string representing the word.
-    """
-    # returns the word as binary data
+def get_64bit_hash(word: str) -> str:
     hash_bytes = hashlib.md5(word.encode("utf-8")).digest()
-    # takes first byte out of the 16 byte digest
-    byte_value = hash_bytes[0]
-    # 08b converts the value into 8-bit binary string
-    return f'{byte_value:08b}'
+    hash_value = int.from_bytes(hash_bytes[:8], byteorder="big")
+    return f"{hash_value:064b}"
+
 def hash_text(text: str) -> dict[str, str]:
     """ Hashes the full text, and returns a dictionary containing each word's unique hash"""
     punctuation = "'!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
@@ -353,7 +348,7 @@ def hash_text(text: str) -> dict[str, str]:
         if word in hashed_words:
             pass
         else:
-            hashed_words[word] = get_8bit_hash(word)
+            hashed_words[word] = get_64bit_hash(word)
     return hashed_words
 
 def count_raw_words(text: str) -> dict[str, int]:
@@ -378,15 +373,15 @@ def compute_bitwise_vector(word_counts: dict[str, int], hashed_words: dict[str, 
     number of unique words and B is the bit length (8)
     """
 
-    v = [0] * 8
+    v = [0] * 64
 
     for word, weight in word_counts.items():
         # Integer hash, since hashed_words is a string
         h = int(hashed_words[word], 2)
 
-        for i in range(8):
+        for i in range(64):
             # Checking if the ith bit from the right is 1, if it is then increment weight
-            if (h >> (7 - i)) & 1:
+            if (h >> (63 - i)) & 1:
                 v[i] += weight
             else:
                 v[i] -= weight
