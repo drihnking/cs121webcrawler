@@ -125,20 +125,27 @@ def extract_next_links(url, resp):
             non_stop_words = [w for w in words if w not in STOP_WORDS]
             WORD_FREQUENCIES.update(non_stop_words)
 
-        # Iterate over all anchor tags (<a>) found in the parsed HTML document
+        # extract links and skip malformed URLs w/o stopping the page
         for link in html_parser.find_all('a'):
+            href = link.get('href')
 
-            # Extract 'href' attribute string and trim whitespace
-            href = link.get('href', '').strip()
-            # Skip empty href attributes or non HTTP schemes
-            if href and not href.startswith(('javascript:', 'mailto:', 'tel:')):
-                # Convert relative path URLS into absolute URLs
+            if not isinstance(href, str):
+                continue
+
+            href = href.strip()
+
+            if not href or href.lower().startswith(('javascript:', 'mailto:', 'tel:')): continue
+
+            try:
                 absolute_url = urljoin(base_url, href)
-                # Strip out fragment identifiers
                 absolute_url = urldefrag(absolute_url)[0]
 
                 if is_valid(absolute_url):
                     url_list.append(absolute_url)
+
+            except(ValueError, TypeError):
+                #ignore malformed links and continue processing the page
+                continue
         # Convert list to set to eliminate dupes then back
         return list(set(url_list))
         # Otherwise, return empty list
@@ -218,17 +225,27 @@ def is_valid(url):
         parsed = urlparse(url)
         hostname = (parsed.hostname or "").lower()
 
-        # skip DokuWiki actions that generate many versions of the same page
-        if hostname == "wiki.ics.uci.edu":
-            params = parse_qsl(parsed.query, keep_blank_values=True)
+        # block non-content DokuWiki actions on any allowed subdomain
+        path = parsed.path.lower()
+        query_pairs = parse_qsl(parsed.query, keep_blank_values=True)
+        query_keys = {name.lower() for name, _ in query_pairs}
 
+        if path.startswith("/doku.php"):
             blocked_params = {
-                "rev", "idx", "oldid", "tab_files",
-                "tab_details", "do"
+                "do", "rev", "rev2", "oldid", "idx",
+                "tab_files", "tab_details", "image", "difftype"
             }
 
-            if any(name.lower() in blocked_params for name, value in params):
+            if query_keys & blocked_params:
                 return False
+
+            if any(name.startswith("rev2[") for name in query_keys):
+                return False
+
+        # block URL parameters used for non-content actions
+        if query_keys & {"action", "replytocom", "sessionid", "phpsessid"}:
+            return False
+
         # AVOID combinatorial filter URLs on ICS listing pages
         if parsed.hostname == "ics.uci.edu":
             if parsed.path.rstrip("/") in (
@@ -257,6 +274,20 @@ def is_valid(url):
 
         # Checks if URL's domain belongs to the specified allowed_domains
         if not any(hostname == domain or (hostname or "").endswith("." + domain) for domain in allowed_domains):
+            return False
+
+        # reject calendar exports and generated daily calendar pages
+        query_keys = {
+            key.lower()
+            for key, _ in parse_qsl(parsed.query, keep_blank_values=True)
+        }
+
+        if query_keys & {"ical", "outlook-ical", "google-calendar"}:
+            return False
+
+        path = parsed.path.lower()
+
+        if re.search(r"/day/\d{4}-\d{2}-\d{2}(?:/|$)", path):
             return False
 
         path = parsed.path.lower()
@@ -290,6 +321,7 @@ def is_valid(url):
             + r"|data|dat|exe|bz2|tar|msi|bin|7z|psd|dmg|iso"
             + r"|epub|dll|cnf|tgz|sha1|apk|sql|json|xml|war|py"
             + r"|thmx|mso|arff|rtf|jar|csv|cpp|c|java|ics"
+            + r"|ova|vmdk|vdi|qcow2|img"
             + r"|rm|smil|wmv|swf|wma|zip|rar|gz)$",
             path
         ):

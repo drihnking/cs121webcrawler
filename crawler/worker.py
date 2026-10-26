@@ -6,9 +6,14 @@ from utils.download import download
 from utils import get_logger
 import scraper
 
+import resource
+
 
 _scraper_lock = Lock()
 
+def log_memory(stage):
+    usage = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+    print(f"MEMORY [{stage}]: {usage:.1f} MB", flush=True)
 
 class Worker(Thread):
     """repeatedly fetch queued URls  and hand extracted links to the frontier"""
@@ -27,9 +32,8 @@ class Worker(Thread):
         super().__init__(daemon=True)
 
     def run(self):
-        """main worker loop where it always mark a URL finished even after logged errors"""
+        """process URLs while monitoring memory usage"""
         while True:
-            # threads would pull unique work from the shared frontier, safely
             url = self.frontier.get_tbd_url()
 
             if url is None:
@@ -37,18 +41,23 @@ class Worker(Thread):
                 return
 
             try:
-                # enforce spacing between requests before using the course downloader
+                self.logger.info("DEBUG: About to download %s", url)
+                log_memory("before download")
+
                 self.frontier.wait_for_domain(url)
+
+                self.logger.info("DEBUG: Calling download() for %s", url)
                 resp = download(url, self.config, self.logger)
+
+                log_memory("after download")
+
                 self.logger.info("Downloaded %s, status <%s>", url, resp.status)
 
-                # since shared scraper stats & fingerprint dupes are global
-                # it'll serialize the entire scraper call to avoid mutations happening simultaneously
                 with _scraper_lock:
+                    log_memory("before scraper")
                     found = scraper.scraper(url, resp)
-                    scraper.save_analytics()
+                    log_memory("after scraper")
 
-                # add_url would delete dupes of discovered links while holding its lock
                 for link in found:
                     self.frontier.add_url(link)
 
@@ -56,5 +65,4 @@ class Worker(Thread):
                 self.logger.exception("Failed to process %s", url)
 
             finally:
-                # oustanding must reach 0 for a clean shutdown
                 self.frontier.mark_url_complete(url)
