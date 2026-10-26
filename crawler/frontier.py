@@ -1,4 +1,4 @@
-
+import re
 import shelve
 import time
 from collections import Counter, deque
@@ -16,22 +16,22 @@ class Frontier:
         self.logger = get_logger("FRONTIER")
         self.config = config
 
-        # A condition lock protects the queue, outstanding count, and shelve DB.
-        # It also lets idle threads sleep until another worker discovers URLs.
+        # a condition lock protects the queue, outstanding count, and shelve DB
+        # it also lets idle threads sleep until another worker discovers URLs
         self.condition = Condition()
         self.to_be_downloaded = deque()
 
-        # Number of queued OR currently in-progress URLs, used to detect completion.
+        # number of queued OR currently in-progress URLs, used to detect completion
         self.outstanding = 0
 
         # track how many URLs have been accepted for each query pattern
         self.query_pattern_counts = Counter()
 
-        # Separate lock reserves request slots without blocking frontier queue access.
+        # separate lock reserves request slots without blocking frontier queue access
         self.politeness_lock = Lock()
         self.next_request_time = {}
 
-        # Shelve must only be read/written while holding self.condition.
+        # shelve must only be read/written while holding self.condition.
         if restart:
             # shelve may use multiple files; clear it via shelve rather than os.remove.
             with shelve.open(config.save_file) as old:
@@ -69,17 +69,36 @@ class Frontier:
 
     @staticmethod
     def query_pattern(url):
-        # group urls by hostname, path & query parameter names
+        # split the url into its hostname, path, and query
         parsed = urlparse(url)
+        path = parsed.path.lower()
 
-        if not parsed.query:
+        # group monthly calendar pages under the same pattern
+        # this works even if there are no query parameters
+        is_calendar = any(part in {"events", "calendar", "calendars"}
+            for part in path.split("/")
+        )
+
+        if is_calendar:
+            path = re.sub(r"/\d{4}-(?:0[1-9]|1[0-2])(?=/|$)","/{month}", path)
+
+        # collect query parameter names instead of their values
+        keys = tuple(sorted({
+            key.lower() for key, _ in parse_qsl(
+                parsed.query,
+                keep_blank_values=True
+            )
+        }))
+
+        # regular urls without queries don't need a pattern budget
+        if not keys and "{month}" not in path:
             return None
 
-        keys = tuple(sorted({key.lower()
-                             for key, _ in parse_qsl(parsed.query, keep_blank_values=True)}))
-
-        return((parsed.hostname or "").lower(), parsed.path.lower(), keys)
-
+        return (
+            (parsed.hostname or "").lower(),
+            path,
+            keys
+        )
     @staticmethod
     def query_budget(pattern):
         #give content identifiers more room than generic query pages
@@ -124,6 +143,17 @@ class Frontier:
             self.outstanding += 1
             self.condition.notify_all()
 
+    def defer_url(self, url):
+        urlhash = get_urlhash(url)
+
+        with self.condition:
+            if urlhash in self.save:
+                self.save[urlhash] = (url, False)
+                self.save.sync()
+
+            self.outstanding -= 1
+            self.condition.notify_all()
+
     def mark_url_complete(self, url):
         """persist completion and wake workers that MAY be waiting for work."""
         urlhash = get_urlhash(url)
@@ -142,7 +172,7 @@ class Frontier:
         """reserve a polite start time for this domain; sleep until that slot."""
         hostname = (urlparse(url).hostname or "").lower()
 
-        # Group subdomains under their assignment roots; conservative politeness.
+        # group subdomains under their assignment roots w/ conservative politeness
         domain = next(
             (
                 d for d in (

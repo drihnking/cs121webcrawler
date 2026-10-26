@@ -40,6 +40,8 @@ class Worker(Thread):
                 self.logger.info("Frontier is empty. Worker is stopping.")
                 return
 
+            completed = False
+
             try:
                 self.logger.info("DEBUG: About to download %s", url)
                 log_memory("before download")
@@ -53,6 +55,10 @@ class Worker(Thread):
 
                 self.logger.info("Downloaded %s, status <%s>", url, resp.status)
 
+                if resp.status not in {200, 301, 302, 303, 307, 308}:
+                    self.logger.warning("Deferring unsuccessful URL %s (status %s)", url, resp.status)
+                    continue
+
                 with _scraper_lock:
                     log_memory("before scraper")
                     found = scraper.scraper(url, resp)
@@ -60,9 +66,14 @@ class Worker(Thread):
 
                 for link in found:
                     self.frontier.add_url(link)
+                
+                completed = True
 
             except Exception:
                 self.logger.exception("Failed to process %s", url)
 
             finally:
-                self.frontier.mark_url_complete(url)
+                if completed:
+                    self.frontier.mark_url_complete(url)
+                else:
+                    self.frontier.defer_url(url)

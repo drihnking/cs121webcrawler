@@ -86,6 +86,11 @@ def extract_next_links(url, resp):
         if ctype and "html" not in ctype:
             return []
 
+        content_start = raw_response.content[:1024].lstrip().lower()
+
+        if content_start.startswith((b"%pdf-", b"pk\x03\x04", b"\x89png",b"\xff\xd8\xff")): return[]
+        if b"\x00" in raw_response.content[:4096]: return[]
+
         # Skip unusually large responses
         if len(raw_response.content) > MAX_BYTES:
             return []
@@ -106,8 +111,12 @@ def extract_next_links(url, resp):
         # Parse HTML body content using BeautifulSoup and Python's build-in html.parser function
         html_parser = BeautifulSoup(raw_response.content, "html.parser")
 
+        if html_parser.find(["html", "head", "body"]) is None:
+            return []
+
         # Get plain text from HTML and check if fingerprint matches a previously seen page
-        page_text = html_parser.get_text()
+        for element in html_parser(["script", "style", "noscript", "template"]): element.decompose()
+        page_text = html_parser.get_text(separator=" ", strip=True)
         is_duplicate = is_duplicate_page(page_text)
 
         # Clean text to extract words in O(n) time
@@ -128,6 +137,10 @@ def extract_next_links(url, resp):
             non_stop_words = [w for w in words if w not in STOP_WORDS]
             WORD_FREQUENCIES.update(non_stop_words)
             COUNTED_TEXT_URLS.add(clean_url)
+
+        # stop expanding duplicate paginated pages
+        if is_duplicate and re.search(r"/page/\d+(?:/|$)", urlparse(clean_url).path):
+            return []
 
         # extract links and skip malformed URLs w/o stopping the page
         for link in html_parser.find_all('a'):
@@ -213,6 +226,32 @@ def is_allowed_by_bots(url, user_agent = '*'):
         # If there is an error, default to true to avoid blocking valid URLs
         return True
 
+def is_calendar_trap(url):
+    # get the url path and split it into separated parts
+    parsed = urlparse(url)
+    path = parsed.path.lower().rstrip("/")
+    segments = [s for s in path.split("/") if s]
+
+    #check for calendar export links
+    query_keys = {key.lower() for key, _ in parse_qsl(parsed.query, keep_blank_values=True)}
+
+    if query_keys & {"ical", "outlook-ical", "google-calendar"}: return True
+    # on check dates if the url looks like a calendar page
+    if not any(s in {"events", "calendar", "calendars"} for s in segments): return False
+
+    #check for dates like 2025-10-10
+    for segment in segments:
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", segment): return True
+
+    #check for dates after day or week in the url
+    for i, segment in enumerate(segments):
+        if segment in {"day", "week"} and i + 1 < len(segments):
+            if re.fullmatch(r"\d{4}(?:-\d{2})?(?:-\d{2})?", segments[i + 1]):
+                return True
+    
+    # no calendar trap found
+    return False
+
 
 def is_valid(url):
     # Decide whether to crawl this url or not. 
@@ -280,6 +319,10 @@ def is_valid(url):
         if not any(hostname == domain or (hostname or "").endswith("." + domain) for domain in allowed_domains):
             return False
 
+        # skip calendar pages that keep generating different dates
+        if is_calendar_trap(url):
+            return False
+
         # reject calendar exports and generated daily calendar pages
         query_keys = {
             key.lower()
@@ -291,8 +334,7 @@ def is_valid(url):
 
         path = parsed.path.lower()
 
-        if re.search(r"/day/\d{4}-\d{2}-\d{2}(?:/|$)", path):
-            return False
+        if re.search(r"/(?:events|calendar)(?:/[^?#]*)?/\d{4}-\d{2}-\d{2}(?:/|$)", path): return False
 
         path = parsed.path.lower()
 
