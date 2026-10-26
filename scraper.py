@@ -12,6 +12,7 @@ from bs4 import BeautifulSoup
 from collections import Counter
 
 MAX_BYTES = 5_000_000
+COUNTED_TEXT_URLS = set()
 # Global set to store seen 8-bit fingerprints across the crawl
 SIMHASHES = set()
 # Cache dictionary to store rfp instances per domain
@@ -94,8 +95,8 @@ def extract_next_links(url, resp):
         # Subdomain tracking for ics.uci.edu for Q4 in deliverables
         parsed_url = urlparse(clean_url)
         hostname = parsed_url.hostname or ""
-        if hostname.endswith(".ics.uci.edu") or hostname == "ics.uci.edu":
-            subdomain_key = f'{parsed_url.scheme}://{hostname}'
+        if hostname.endswith(".ics.uci.edu"): # can't include the root domain, since the assignment asked for subdomains
+            subdomain_key = hostname
             # Not in the map yet, create a set to keep track of unique subdomains.
             if subdomain_key not in SUBDOMAIN_PAGE_MAP:
                 SUBDOMAIN_PAGE_MAP[subdomain_key] = set()
@@ -112,18 +113,21 @@ def extract_next_links(url, resp):
         # Clean text to extract words in O(n) time
         punctuation = "'!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
 
-        if not is_duplicate:
-            cleaned_text = page_text.lower().translate(str.maketrans("","",punctuation))
-            words = [w for w in re.findall(r"[a-z0-9]+(?:'[a-z0-9]+)*", page_text.lower()) if len(w) > 1]
+        words = [
+            w
+            for w in re.findall(r"[a-z0-9]+(?:'[a-z0-9]+)*", page_text.lower())
+            if w
+        ]
 
-            # Check for longest page for Q2 in deliverables
-            word_count = len(words)
-            if word_count > LONGEST_PAGE[1]:
-                LONGEST_PAGE = (clean_url, word_count)
+        word_count = len(words)
 
-            # Filter stop words and record frequencies across pages for Q3 in deliverables
+        if word_count > LONGEST_PAGE[1]:
+            LONGEST_PAGE = (clean_url, word_count)
+
+        if clean_url not in COUNTED_TEXT_URLS:
             non_stop_words = [w for w in words if w not in STOP_WORDS]
             WORD_FREQUENCIES.update(non_stop_words)
+            COUNTED_TEXT_URLS.add(clean_url)
 
         # extract links and skip malformed URLs w/o stopping the page
         for link in html_parser.find_all('a'):
@@ -450,6 +454,7 @@ def save_analytics():
         "WORD_FREQUENCIES": WORD_FREQUENCIES,
         "SUBDOMAIN_PAGE_MAP": SUBDOMAIN_PAGE_MAP,
         "SIMHASHES": SIMHASHES,
+        "COUNTED_TEXT_URLS": COUNTED_TEXT_URLS,
     }
 
     # write to a temporary file first so an interrupted save
@@ -475,6 +480,7 @@ def load_analytics(restart=False):
         WORD_FREQUENCIES.clear()
         SUBDOMAIN_PAGE_MAP.clear()
         SIMHASHES.clear()
+        COUNTED_TEXT_URLS.clear()
         return
 
     # If this is the first run, there won't be anything to load yet
@@ -492,13 +498,22 @@ def load_analytics(restart=False):
     # Restore the longest page found so far
     LONGEST_PAGE = data["LONGEST_PAGE"]
 
+    # introduced a new function that prevent counting the same URL's text more than once
+    COUNTED_TEXT_URLS.clear()
+    COUNTED_TEXT_URLS.update(data.get("COUNTED_TEXT_URLS", data["UNIQUE_URLS"]))
+
     # Restore the word frequencies
     WORD_FREQUENCIES.clear()
     WORD_FREQUENCIES.update(data["WORD_FREQUENCIES"])
 
     # Restore the subdomain page counts
     SUBDOMAIN_PAGE_MAP.clear()
-    SUBDOMAIN_PAGE_MAP.update(data["SUBDOMAIN_PAGE_MAP"])
+
+    #merge http and https entries while still retaining unique urls
+    for old_key, urls in data["SUBDOMAIN_PAGE_MAP"].items():
+        hostname = urlparse(old_key).hostname or old_key
+        if hostname.endswith(".ics.uci.edu"):
+            SUBDOMAIN_PAGE_MAP.setdefault(hostname, set()).update(urls)
 
     # Restore the fingerprints used to detect similar pages
     SIMHASHES.clear()
