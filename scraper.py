@@ -43,14 +43,18 @@ STOP_WORDS = {
     "would", "wouldn't", "you", "you'd", "you'll", "you're", "you've", "your", "yours", "yourself", "yourselves"
 }
 def scraper(url, resp) -> list:
-    """Processes the page the URL links to"""
+    """
+    Processes the page the URL links to
+    """
     if resp is None:
         return []
 
     return extract_next_links(url, resp)
 
 def extract_next_links(url, resp) -> list:
-    """Returns a list of URLS found in the given page"""
+    """
+    Returns a list of URLS found in the given page
+    """
     # Implementation required.
     # url: the URL that was used to get the page
     # resp.url: the actual url of the page
@@ -92,7 +96,7 @@ def extract_next_links(url, resp) -> list:
 
         # Tracking for Q1 in deliverables
         UNIQUE_URLS.add(clean_url)
-        
+
         # Subdomain tracking for ics.uci.edu for Q4 in deliverables
         parsed_url = urlparse(clean_url)
         hostname = parsed_url.hostname or ""
@@ -157,7 +161,9 @@ def extract_next_links(url, resp) -> list:
     return []
 
 def _extract_from_html(base_url, html_parser):
-    """Helper function for extract_next_links. Finds and parses links found in HTML"""
+    """
+    Helper function for extract_next_links. Finds and parses links found in HTML
+    """
     # Use set to eliminate dupes
     url_set = set()
 
@@ -212,7 +218,9 @@ def is_allowed_by_bots(url, user_agent = '*'):
 
 
 def is_valid(url):
-    # Decide whether to crawl this url or not. 
+    """
+    Decide whether to crawl this url or not.
+    """
     # If you decide to crawl it, return True; otherwise return False.
     # There are already some conditions that return False.
     try:
