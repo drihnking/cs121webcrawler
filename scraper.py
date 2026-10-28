@@ -42,13 +42,15 @@ STOP_WORDS = {
     "where", "where's", "which", "while", "who", "who's", "whom", "why", "why's", "with", "won't",
     "would", "wouldn't", "you", "you'd", "you'll", "you're", "you've", "your", "yours", "yourself", "yourselves"
 }
-def scraper(url, resp):
+def scraper(url, resp) -> list:
+    """Processes the page the URL links to"""
     if resp is None:
         return []
 
     return extract_next_links(url, resp)
 
-def extract_next_links(url, resp):
+def extract_next_links(url, resp) -> list:
+    """Returns a list of URLS found in the given page"""
     # Implementation required.
     # url: the URL that was used to get the page
     # resp.url: the actual url of the page
@@ -58,10 +60,9 @@ def extract_next_links(url, resp):
     #         resp.raw_response.url: the url, again
     #         resp.raw_response.content: the content of the page!
     # Return a list with the hyperlinks (as strings) scrapped from resp.raw_response.content
-    
+
     # updates the overall longest-page tupe, so therefore can't be a local variable
     global LONGEST_PAGE
-    url_list = []
 
     # Page requested properly (Successful response)
     if resp.status == 200:
@@ -91,6 +92,7 @@ def extract_next_links(url, resp):
 
         # Tracking for Q1 in deliverables
         UNIQUE_URLS.add(clean_url)
+        
         # Subdomain tracking for ics.uci.edu for Q4 in deliverables
         parsed_url = urlparse(clean_url)
         hostname = parsed_url.hostname or ""
@@ -100,7 +102,6 @@ def extract_next_links(url, resp):
             if subdomain_key not in SUBDOMAIN_PAGE_MAP:
                 SUBDOMAIN_PAGE_MAP[subdomain_key] = set()
             SUBDOMAIN_PAGE_MAP[subdomain_key].add(clean_url)
-
 
         # Parse HTML body content using BeautifulSoup and Python's build-in html.parser function
         html_parser = BeautifulSoup(raw_response.content, "html.parser")
@@ -113,8 +114,9 @@ def extract_next_links(url, resp):
         punctuation = "'!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
 
         if not is_duplicate:
-            cleaned_text = page_text.lower().translate(str.maketrans("","",punctuation))
-            words = [w for w in re.findall(r"[a-z0-9]+(?:'[a-z0-9]+)*", page_text.lower()) if len(w) > 1]
+            cleaned_text = page_text.lower().translate(str.maketrans("", "", punctuation))
+            words = [w for w in re.findall(r"[a-z0-9]+(?:'[a-z0-9]+)*", page_text.lower()) if
+                     len(w) > 1]
 
             # Check for longest page for Q2 in deliverables
             word_count = len(words)
@@ -125,23 +127,7 @@ def extract_next_links(url, resp):
             non_stop_words = [w for w in words if w not in STOP_WORDS]
             WORD_FREQUENCIES.update(non_stop_words)
 
-        # Iterate over all anchor tags (<a>) found in the parsed HTML document
-        for link in html_parser.find_all('a'):
-
-            # Extract 'href' attribute string and trim whitespace
-            href = link.get('href', '').strip()
-            # Skip empty href attributes or non HTTP schemes
-            if href and not href.startswith(('javascript:', 'mailto:', 'tel:')):
-                # Convert relative path URLS into absolute URLs
-                absolute_url = urljoin(base_url, href)
-                # Strip out fragment identifiers
-                absolute_url = urldefrag(absolute_url)[0]
-
-                if is_valid(absolute_url):
-                    url_list.append(absolute_url)
-        # Convert list to set to eliminate dupes then back
-        return list(set(url_list))
-        # Otherwise, return empty list
+        return _extract_from_html(base_url, html_parser)
 
     # Check error and handle crashes appropriately
     # Handle redirects that were not automatically followed
@@ -150,7 +136,7 @@ def extract_next_links(url, resp):
         raw_response = resp.raw_response
         if raw_response is None:
             return []
-        
+
         # Read the redirect destination from the response headers
         headers = getattr(raw_response, "headers", {})
         # Accounts for case-insensitive header keys
@@ -158,7 +144,7 @@ def extract_next_links(url, resp):
 
         if not location:
             return []
-        
+
         # Find the absolute URL of the redirect destination
         base_url = getattr(raw_response, "url", None) or resp.url or url
         redirect_url = urljoin(base_url, location)
@@ -167,9 +153,31 @@ def extract_next_links(url, resp):
 
         if is_valid(redirect_url):
             return [redirect_url]
-        
 
     return []
+
+def _extract_from_html(base_url, html_parser):
+    """Helper function for extract_next_links. Finds and parses links found in HTML"""
+    # Use set to eliminate dupes
+    url_set = set()
+
+    # Iterate over all anchor tags (<a>) found in the parsed HTML document
+    for link in html_parser.find_all('a'):
+
+        # Extract 'href' attribute string and trim whitespace
+        href = link.get('href', '').strip()
+        # Skip empty href attributes or non HTTP schemes
+        if href and not href.startswith(('javascript:', 'mailto:', 'tel:')):
+            # Convert relative path URLS into absolute URLs
+            absolute_url = urljoin(base_url, href)
+            # Strip out fragment identifiers
+            absolute_url = urldefrag(absolute_url)[0]
+
+            if is_valid(absolute_url):
+                url_set.append(absolute_url)
+    # Convert to list
+    return list(url_set)
+    # Otherwise, return empty list
 
 
 
