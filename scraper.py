@@ -272,6 +272,7 @@ def is_valid(url):
 
         query = parsed.query.lower()
         full_url = url.lower()
+        # Keywords that are commonly associated in traps
         trap_keywords = [
             'calendar', 'event', 'date', 'action=edit', 'action=download', 'replytocom',
             'share=', 'login', 'auth', 'filter', 'sort='
@@ -307,9 +308,10 @@ def is_duplicate_page(page_text: str) -> bool:
     Exact and near-duplicates will produce identical or nearly identical fingerprints.
     Threshold: Hamming distance <= 1 (will be 0 for exact matches)
     """
-
+    # If the page is empty or missing, it is a duplicate and we can safely skip it.
     if not page_text or not page_text.strip():
         return True
+    # Use the below helper functions to calculate the vector and create the fingerprint.
     hashed_words = hash_text(page_text)
     word_counts = count_raw_words(page_text)
     vector = compute_bitwise_vector(word_counts, hashed_words)
@@ -352,6 +354,7 @@ def print_crawl_analytics():
 
 # functions for simHash, might move to a separate file later
 def get_64bit_hash(word: str) -> str:
+    """ Gets the hash in bits so that we have a unique code """
     hash_bytes = hashlib.md5(word.encode("utf-8")).digest()
     hash_value = int.from_bytes(hash_bytes[:8], byteorder="big")
     return f"{hash_value:064b}"
