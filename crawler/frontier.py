@@ -1,9 +1,9 @@
-
+import re
 import shelve
 import time
-from collections import deque
+from collections import Counter, deque
 from threading import Condition, Lock
-from urllib.parse import urlparse
+from urllib.parse import urlparse, parse_qsl
 
 from utils import get_logger, get_urlhash, normalize
 from scraper import is_valid
@@ -16,19 +16,22 @@ class Frontier:
         self.logger = get_logger("FRONTIER")
         self.config = config
 
-        # A condition lock protects the queue, outstanding count, and shelve DB.
-        # It also lets idle threads sleep until another worker discovers URLs.
+        # a condition lock protects the queue, outstanding count, and shelve DB
+        # it also lets idle threads sleep until another worker discovers URLs
         self.condition = Condition()
         self.to_be_downloaded = deque()
 
-        # Number of queued OR currently in-progress URLs, used to detect completion.
+        # number of queued OR currently in-progress URLs, used to detect completion
         self.outstanding = 0
 
-        # Separate lock reserves request slots without blocking frontier queue access.
+        # track how many URLs have been accepted for each query pattern
+        self.query_pattern_counts = Counter()
+
+        # separate lock reserves request slots without blocking frontier queue access
         self.politeness_lock = Lock()
         self.next_request_time = {}
 
-        # Shelve must only be read/written while holding self.condition.
+        # shelve must only be read/written while holding self.condition.
         if restart:
             # shelve may use multiple files; clear it via shelve rather than os.remove.
             with shelve.open(config.save_file) as old:
@@ -36,11 +39,16 @@ class Frontier:
 
         self.save = shelve.open(config.save_file)
 
-        if not restart:
-            for url, complete in self.save.values():
-                if not complete and is_valid(url):
-                    self.to_be_downloaded.append(url)
-                    self.outstanding += 1
+        # restore saved URL patterns and unfinished crawl work
+        for url, complete in self.save.values():
+            pattern = self.query_pattern(url)
+
+            if pattern is not None:
+                self.query_pattern_counts[pattern] += 1
+
+            if not restart and not complete and is_valid(url):
+                self.to_be_downloaded.append(url)
+                self.outstanding += 1
 
         if self.outstanding == 0 and not self.save:
             for url in config.seed_urls:
@@ -59,24 +67,91 @@ class Frontier:
 
             return self.to_be_downloaded.popleft()
 
+    @staticmethod
+    def query_pattern(url):
+        # split the url into its hostname, path, and query
+        parsed = urlparse(url)
+        path = parsed.path.lower()
+
+        # group monthly calendar pages under the same pattern
+        # this works even if there are no query parameters
+        is_calendar = any(part in {"events", "calendar", "calendars"}
+            for part in path.split("/")
+        )
+
+        if is_calendar:
+            path = re.sub(r"/\d{4}-(?:0[1-9]|1[0-2])(?=/|$)","/{month}", path)
+
+        # collect query parameter names instead of their values
+        keys = tuple(sorted({
+            key.lower() for key, _ in parse_qsl(
+                parsed.query,
+                keep_blank_values=True
+            )
+        }))
+
+        # regular urls without queries don't need a pattern budget
+        if not keys and "{month}" not in path:
+            return None
+
+        return (
+            (parsed.hostname or "").lower(),
+            path,
+            keys
+        )
+    @staticmethod
+    def query_budget(pattern):
+        #give content identifiers more room than generic query pages
+        keys = set(pattern[2])
+
+        if keys and keys.issubset({"id", "p", "article", "post", "newsid"}): return 1000
+
+        return 80
+
     def add_url(self, url):
-        """validate and enqueue a URL only if it has NEVER been recorded"""
+        """validate, deduplicate and enqueue URLs withint the pattern budget"""
+        url = normalize(url)
+
         if not is_valid(url):
             return
 
-        url = normalize(url)
+        urlhash = get_urlhash(url)
+
+        with self.condition:
+            # skip urls that's already stored in frontier
+            if urlhash in self.save:
+                return
+
+            #prevent excessive variations of the same URL structure
+            pattern = self.query_pattern(url)
+
+            if pattern is not None:
+                budget = self.query_budget(pattern)
+
+                if self.query_pattern_counts[pattern] >= budget:
+                    return
+
+            # persist the discovered url before workers can retrieve it
+            self.save[urlhash] = (url, False)
+            self.save.sync()
+
+            # count only URLs that were successfully accepted into the frontier
+            if pattern is not None:
+                self.query_pattern_counts[pattern] += 1
+
+            self.to_be_downloaded.append(url)
+            self.outstanding += 1
+            self.condition.notify_all()
+
+    def defer_url(self, url):
         urlhash = get_urlhash(url)
 
         with self.condition:
             if urlhash in self.save:
-                return
+                self.save[urlhash] = (url, False)
+                self.save.sync()
 
-            # persist(save to permanent storage) the discovered URL before workers can pick it up
-            self.save[urlhash] = (url, False)
-            self.save.sync()
-
-            self.to_be_downloaded.append(url)
-            self.outstanding += 1
+            self.outstanding -= 1
             self.condition.notify_all()
 
     def mark_url_complete(self, url):
@@ -97,7 +172,7 @@ class Frontier:
         """reserve a polite start time for this domain; sleep until that slot."""
         hostname = (urlparse(url).hostname or "").lower()
 
-        # Group subdomains under their assignment roots; conservative politeness.
+        # group subdomains under their assignment roots w/ conservative politeness
         domain = next(
             (
                 d for d in (

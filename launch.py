@@ -23,7 +23,9 @@ def main(config_file, restart):
 
     print("DEBUG: Frontier initialized", flush=True)
     try:
+        print("DEBUG: Starting crawler workers", flush=True)
         crawler.start()
+        print("DEBUG: Crawler workers finished", flush=True)
     finally:
         # Prints deliverable data when crawling is done or stopped by Ctrl + C
         save_analytics()
