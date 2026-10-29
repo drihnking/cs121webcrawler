@@ -16,7 +16,7 @@ COUNTED_TEXT_URLS = set()
 # Global set to store seen 8-bit fingerprints across the crawl
 SIMHASHES = set()
 # Cache dictionary to store rfp instances per domain
-ROBOTS_CACHE = {}
+ROBOTS_CACHE = dict()
 # 1. Unique URLs found
 UNIQUE_URLS = set()
 # 2. Longest page tracking
@@ -24,7 +24,7 @@ LONGEST_PAGE = ("", 0)
 # 3. Frequency counter for overall words
 WORD_FREQUENCIES = Counter()
 # 4. Dictionary mapping subdomains to sets of unique pages
-SUBDOMAIN_PAGE_MAP = {}
+SUBDOMAIN_PAGE_MAP = dict()
 # English stop words
 STOP_WORDS = {
     "a", "about", "above", "after", "again", "against", "all", "am", "an", "and", "any", "are", "aren't",
@@ -43,13 +43,20 @@ STOP_WORDS = {
     "where", "where's", "which", "while", "who", "who's", "whom", "why", "why's", "with", "won't",
     "would", "wouldn't", "you", "you'd", "you'll", "you're", "you've", "your", "yours", "yourself", "yourselves"
 }
-def scraper(url, resp):
+
+def scraper(url, resp) -> list:
+    """
+    Processes the page the URL links to
+    """
     if resp is None:
         return []
 
     return extract_next_links(url, resp)
 
-def extract_next_links(url, resp):
+def extract_next_links(url, resp) -> list:
+    """
+    Returns a list of URLS found in the given page
+    """
     # Implementation required.
     # url: the URL that was used to get the page
     # resp.url: the actual url of the page
@@ -59,10 +66,6 @@ def extract_next_links(url, resp):
     #         resp.raw_response.url: the url, again
     #         resp.raw_response.content: the content of the page!
     # Return a list with the hyperlinks (as strings) scrapped from resp.raw_response.content
-    
-    # updates the overall longest-page tupe, so therefore can't be a local variable
-    global LONGEST_PAGE
-    url_list = []
 
     # Page requested properly (Successful response)
     if resp.status == 200:
@@ -77,7 +80,7 @@ def extract_next_links(url, resp):
         base_url = getattr(raw_response, "url", None) or resp.url or url
         clean_url = urldefrag(base_url)[0]
 
-        # check the final URL in case the request was redirected
+        # Check the final URL in case the request was redirected
         if not is_valid(clean_url):
             return []
 
@@ -95,77 +98,21 @@ def extract_next_links(url, resp):
         if len(raw_response.content) > MAX_BYTES:
             return []
 
-        # Tracking for Q1 in deliverables
-        UNIQUE_URLS.add(clean_url)
-        # Subdomain tracking for ics.uci.edu for Q4 in deliverables
-        parsed_url = urlparse(clean_url)
-        hostname = parsed_url.hostname or ""
-        if hostname.endswith(".ics.uci.edu"): # can't include the root domain, since the assignment asked for subdomains
-            subdomain_key = hostname
-            # Not in the map yet, create a set to keep track of unique subdomains.
-            if subdomain_key not in SUBDOMAIN_PAGE_MAP:
-                SUBDOMAIN_PAGE_MAP[subdomain_key] = set()
-            SUBDOMAIN_PAGE_MAP[subdomain_key].add(clean_url)
-
-
+        # stop expanding duplicate paginated pages
+        if is_duplicate and re.search(r"/page/\d+(?:/|$)", urlparse(clean_url).path):
+            return []
+          
         # Parse HTML body content using BeautifulSoup and Python's build-in html.parser function
         html_parser = BeautifulSoup(raw_response.content, "html.parser")
 
         if html_parser.find(["html", "head", "body"]) is None:
             return []
 
-        # Get plain text from HTML and check if fingerprint matches a previously seen page
-        for element in html_parser(["script", "style", "noscript", "template"]): element.decompose()
-        page_text = html_parser.get_text(separator=" ", strip=True)
-        is_duplicate = is_duplicate_page(page_text)
-
-        # Clean text to extract words in O(n) time
-        punctuation = "'!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
-
-        words = [
-            w
-            for w in re.findall(r"[a-z0-9]+(?:'[a-z0-9]+)*", page_text.lower())
-            if w
-        ]
-
-        word_count = len(words)
-
-        if word_count > LONGEST_PAGE[1]:
-            LONGEST_PAGE = (clean_url, word_count)
-
-        if clean_url not in COUNTED_TEXT_URLS:
-            non_stop_words = [w for w in words if w not in STOP_WORDS]
-            WORD_FREQUENCIES.update(non_stop_words)
-            COUNTED_TEXT_URLS.add(clean_url)
-
-        # stop expanding duplicate paginated pages
-        if is_duplicate and re.search(r"/page/\d+(?:/|$)", urlparse(clean_url).path):
-            return []
-
-        # extract links and skip malformed URLs w/o stopping the page
-        for link in html_parser.find_all('a'):
-            href = link.get('href')
-
-            if not isinstance(href, str):
-                continue
-
-            href = href.strip()
-
-            if not href or href.lower().startswith(('javascript:', 'mailto:', 'tel:')): continue
-
-            try:
-                absolute_url = urljoin(base_url, href)
-                absolute_url = urldefrag(absolute_url)[0]
-
-                if is_valid(absolute_url):
-                    url_list.append(absolute_url)
-
-            except(ValueError, TypeError):
-                #ignore malformed links and continue processing the page
-                continue
-        # Convert list to set to eliminate dupes then back
-        return list(set(url_list))
-        # Otherwise, return empty list
+        track_unique_pages(clean_url) # Handles Q1
+        track_longest_page_and_common_words(clean_url, html_parser) # Handles Q2 & Q3
+        track_subdomains(clean_url) # Handles Q4
+        
+        return _extract_from_html(base_url, html_parser) # Returns 
 
     # Check error and handle crashes appropriately
     # Handle redirects that were not automatically followed
@@ -174,7 +121,7 @@ def extract_next_links(url, resp):
         raw_response = resp.raw_response
         if raw_response is None:
             return []
-        
+
         # Read the redirect destination from the response headers
         headers = getattr(raw_response, "headers", {})
         # Accounts for case-insensitive header keys
@@ -182,7 +129,7 @@ def extract_next_links(url, resp):
 
         if not location:
             return []
-        
+
         # Find the absolute URL of the redirect destination
         base_url = getattr(raw_response, "url", None) or resp.url or url
         redirect_url = urljoin(base_url, location)
@@ -191,9 +138,98 @@ def extract_next_links(url, resp):
 
         if is_valid(redirect_url):
             return [redirect_url]
-        
 
     return []
+
+def track_unique_pages(clean_url) -> None:
+    """
+    Stores unique urls in a set
+    """
+
+    # Tracking for Q1 in deliverables
+    UNIQUE_URLS.add(clean_url)
+
+def track_longest_page_and_common_words(clean_url, html_parser) -> None:
+    """
+    Updates longest page and records frequencies of 50 most common words
+    """
+
+    # updates the overall longest-page tuple, so therefore can't be a local variable
+    global LONGEST_PAGE
+
+    # Get plain text from HTML and check if fingerprint matches a previously seen page
+    for element in html_parser(["script", "style", "noscript", "template"]): element.decompose()
+    page_text = html_parser.get_text(separator=" ", strip=True)
+    is_duplicate = is_duplicate_page(page_text)
+
+    # Clean text to extract words in O(n) time
+    punctuation = "'!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
+
+    words = [
+        w
+        for w in re.findall(r"[a-z0-9]+(?:'[a-z0-9]+)*", page_text.lower())
+        if w
+    ]
+
+    word_count = len(words)
+
+    if word_count > LONGEST_PAGE[1]:
+        LONGEST_PAGE = (clean_url, word_count)
+
+    if clean_url not in COUNTED_TEXT_URLS:
+        non_stop_words = [w for w in words if w not in STOP_WORDS]
+        WORD_FREQUENCIES.update(non_stop_words)
+        COUNTED_TEXT_URLS.add(clean_url)
+
+def track_subdomains(clean_url) -> None:
+    """
+    Stores the number of subdomains paired with
+    the number of unique pages in each one in a dict
+    """
+    
+    # Subdomain tracking for ics.uci.edu for Q4 in deliverables
+    parsed_url = urlparse(clean_url)
+    hostname = parsed_url.hostname or ""
+    
+    if hostname.endswith(".ics.uci.edu"): # can't include the root domain, since the assignment asked for subdomains
+        subdomain_key = hostname
+
+        # Not in the map yet, create a set to keep track of unique subdomains.
+        if subdomain_key not in SUBDOMAIN_PAGE_MAP:
+            SUBDOMAIN_PAGE_MAP[subdomain_key] = set()
+        SUBDOMAIN_PAGE_MAP[subdomain_key].add(clean_url)
+
+def _extract_from_html(base_url, html_parser) -> list:
+    """
+    Helper function for extract_next_links. Finds and parses links found in HTML
+    """
+    # Use set to eliminate dupes
+    url_set = set()
+
+    # extract links and skip malformed URLs w/o stopping the page
+    for link in html_parser.find_all('a'):
+        href = link.get('href')
+
+        if not isinstance(href, str):
+            continue
+
+        href = href.strip()
+
+        if not href or href.lower().startswith(('javascript:', 'mailto:', 'tel:')): continue
+
+        try:
+            absolute_url = urljoin(base_url, href)
+            absolute_url = urldefrag(absolute_url)[0]
+
+            if is_valid(absolute_url):
+                url_list.append(absolute_url)
+
+        except(ValueError, TypeError):
+            #ignore malformed links and continue processing the page
+            continue
+    # Convert to list
+    return list(url_set)
+    # Otherwise, return empty list
 
 
 
@@ -254,7 +290,9 @@ def is_calendar_trap(url):
 
 
 def is_valid(url):
-    # Decide whether to crawl this url or not. 
+    """
+    Decide whether to crawl this url or not.
+    """
     # If you decide to crawl it, return True; otherwise return False.
     # There are already some conditions that return False.
     try:
@@ -438,7 +476,9 @@ def get_64bit_hash(word: str) -> str:
     return f"{hash_value:064b}"
 
 def hash_text(text: str) -> dict[str, str]:
-    """ Hashes the full text, and returns a dictionary containing each word's unique hash"""
+    """
+    Hashes the full text, and returns a dictionary containing each word's unique hash
+    """
     punctuation = "'!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
     # translate strips out unwanted punctuation in O(n) time
     cleaned_text = text.lower().translate(str.maketrans("", "", punctuation))
@@ -492,6 +532,10 @@ def compute_bitwise_vector(word_counts: dict[str, int], hashed_words: dict[str, 
 ANALYTICS_FILE = "crawl_analytics.pkl"
 
 def save_analytics():
+    """
+    Write all data into a .log file
+    """
+
     # keep all the crawl statistics together so we can save them in one file
     data = {
         "UNIQUE_URLS": UNIQUE_URLS,
