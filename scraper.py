@@ -42,6 +42,7 @@ STOP_WORDS = {
     "where", "where's", "which", "while", "who", "who's", "whom", "why", "why's", "with", "won't",
     "would", "wouldn't", "you", "you'd", "you'll", "you're", "you've", "your", "yours", "yourself", "yourselves"
 }
+
 def scraper(url, resp) -> list:
     """
     Processes the page the URL links to
@@ -137,10 +138,10 @@ def track_unique_pages(clean_url) -> None:
 
 def track_longest_page_and_common_words(clean_url, html_parser) -> None:
     """
-
+    Updates longest page and records frequencies of 50 most common words
     """
 
-    # updates the overall longest-page tupe, so therefore can't be a local variable
+    # updates the overall longest-page tuple, so therefore can't be a local variable
     global LONGEST_PAGE
 
     # Get plain text from HTML and check if fingerprint matches a previously seen page
