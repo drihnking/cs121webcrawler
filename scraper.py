@@ -11,6 +11,8 @@ from urllib.parse import urlparse, parse_qsl
 from bs4 import BeautifulSoup
 from collections import Counter
 
+
+
 MAX_BYTES = 5_000_000
 COUNTED_TEXT_URLS = set()
 # Global set to store seen 8-bit fingerprints across the crawl
@@ -43,6 +45,8 @@ STOP_WORDS = {
     "where", "where's", "which", "while", "who", "who's", "whom", "why", "why's", "with", "won't",
     "would", "wouldn't", "you", "you'd", "you'll", "you're", "you've", "your", "yours", "yourself", "yourselves"
 }
+
+
 
 def scraper(url, resp) -> list:
     """
@@ -160,7 +164,7 @@ def track_longest_page_and_common_words(clean_url, html_parser) -> None:
     # Get plain text from HTML and check if fingerprint matches a previously seen page
     for element in html_parser(["script", "style", "noscript", "template"]): element.decompose()
     page_text = html_parser.get_text(separator=" ", strip=True)
-    is_duplicate = is_duplicate_page(page_text)
+    is_duplicate = _is_duplicate_page(page_text)
 
     # Clean text to extract words in O(n) time
     punctuation = "'!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
@@ -183,8 +187,7 @@ def track_longest_page_and_common_words(clean_url, html_parser) -> None:
 
 def track_subdomains(clean_url) -> None:
     """
-    Stores the number of subdomains paired with
-    the number of unique pages in each one in a dict
+    Stores the number of subdomains paired with the number of unique pages in each one in a dict
     """
     
     # Subdomain tracking for ics.uci.edu for Q4 in deliverables
@@ -233,66 +236,11 @@ def _extract_from_html(base_url, html_parser) -> list:
 
 
 
-def is_allowed_by_bots(url, user_agent = '*'):
-    """
-    Helper function to get robots.txt for a domain, then see if the URL can be crawled
-    """
-    try:
-        parsed = urlparse(url)
-        # Make the base domain URL (https://networklocation)
-        domain = f'{parsed.scheme}://{parsed.netloc}'
-        robots_url = urljoin(domain, '/robots.txt')
-
-        if domain not in ROBOTS_CACHE:
-            rfp = RobotFileParser()
-            rfp.set_url(robots_url)
-            try:
-                rfp.read()
-                ROBOTS_CACHE[domain] = rfp
-            # Specifically catches web request timeouts, HTTP failures, connection issues, or URL parsing errors
-            except (URLError, HTTPError, OSError, ValueError):
-                # if robots.txt does not load, default to that the site allows us to crawl
-                ROBOTS_CACHE[domain] = None
-
-        # return permission check using cached RobotFileParser
-        if ROBOTS_CACHE[domain] is not None:
-            return ROBOTS_CACHE[domain].can_fetch(user_agent, url)
-        return True
-    except (URLError, HTTPError, OSError, ValueError):
-        # If there is an error, default to true to avoid blocking valid URLs
-        return True
-
-def is_calendar_trap(url):
-    # get the url path and split it into separated parts
-    parsed = urlparse(url)
-    path = parsed.path.lower().rstrip("/")
-    segments = [s for s in path.split("/") if s]
-
-    #check for calendar export links
-    query_keys = {key.lower() for key, _ in parse_qsl(parsed.query, keep_blank_values=True)}
-
-    if query_keys & {"ical", "outlook-ical", "google-calendar"}: return True
-    # on check dates if the url looks like a calendar page
-    if not any(s in {"events", "calendar", "calendars"} for s in segments): return False
-
-    #check for dates like 2025-10-10
-    for segment in segments:
-        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", segment): return True
-
-    #check for dates after day or week in the url
-    for i, segment in enumerate(segments):
-        if segment in {"day", "week"} and i + 1 < len(segments):
-            if re.fullmatch(r"\d{4}(?:-\d{2})?(?:-\d{2})?", segments[i + 1]):
-                return True
-    
-    # no calendar trap found
-    return False
-
-
-def is_valid(url):
+def is_valid(url) -> bool:
     """
     Decide whether to crawl this url or not.
     """
+
     # If you decide to crawl it, return True; otherwise return False.
     # There are already some conditions that return False.
     try:
@@ -358,7 +306,7 @@ def is_valid(url):
             return False
 
         # skip calendar pages that keep generating different dates
-        if is_calendar_trap(url):
+        if _is_calendar_trap(url):
             return False
 
         # reject calendar exports and generated daily calendar pages
@@ -418,9 +366,68 @@ def is_valid(url):
         print("TypeError for ", url)
         return False
 
-def is_duplicate_page(page_text: str) -> bool:
+def _is_allowed_by_bots(url, user_agent = '*') -> bool:
     """
-    Detects webpage duplicates using SimHash fingerprinting
+    Helper function to get robots.txt for a domain, then see if the URL can be crawled
+    """
+    try:
+        parsed = urlparse(url)
+        # Make the base domain URL (https://networklocation)
+        domain = f'{parsed.scheme}://{parsed.netloc}'
+        robots_url = urljoin(domain, '/robots.txt')
+
+        if domain not in ROBOTS_CACHE:
+            rfp = RobotFileParser()
+            rfp.set_url(robots_url)
+            try:
+                rfp.read()
+                ROBOTS_CACHE[domain] = rfp
+            # Specifically catches web request timeouts, HTTP failures, connection issues, or URL parsing errors
+            except (URLError, HTTPError, OSError, ValueError):
+                # if robots.txt does not load, default to that the site allows us to crawl
+                ROBOTS_CACHE[domain] = None
+
+        # return permission check using cached RobotFileParser
+        if ROBOTS_CACHE[domain] is not None:
+            return ROBOTS_CACHE[domain].can_fetch(user_agent, url)
+        return True
+    except (URLError, HTTPError, OSError, ValueError):
+        # If there is an error, default to true to avoid blocking valid URLs
+        return True
+
+def _is_calendar_trap(url) -> bool:
+    """
+    Helper function to check if url is a calendar trap
+    """
+
+    # get the url path and split it into separated parts
+    parsed = urlparse(url)
+    path = parsed.path.lower().rstrip("/")
+    segments = [s for s in path.split("/") if s]
+
+    #check for calendar export links
+    query_keys = {key.lower() for key, _ in parse_qsl(parsed.query, keep_blank_values=True)}
+
+    if query_keys & {"ical", "outlook-ical", "google-calendar"}: return True
+    # on check dates if the url looks like a calendar page
+    if not any(s in {"events", "calendar", "calendars"} for s in segments): return False
+
+    #check for dates like 2025-10-10
+    for segment in segments:
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", segment): return True
+
+    #check for dates after day or week in the url
+    for i, segment in enumerate(segments):
+        if segment in {"day", "week"} and i + 1 < len(segments):
+            if re.fullmatch(r"\d{4}(?:-\d{2})?(?:-\d{2})?", segments[i + 1]):
+                return True
+    
+    # no calendar trap found
+    return False
+
+def _is_duplicate_page(page_text: str) -> bool:
+    """
+    Helper function to detect webpage duplicates using SimHash fingerprinting
     Exact and near-duplicates will produce identical or nearly identical fingerprints.
     Threshold: Hamming distance <= 1 (will be 0 for exact matches)
     """
@@ -428,9 +435,9 @@ def is_duplicate_page(page_text: str) -> bool:
     if not page_text or not page_text.strip():
         return True
     # Use the below helper functions to calculate the vector and create the fingerprint.
-    hashed_words = hash_text(page_text)
-    word_counts = count_raw_words(page_text)
-    vector = compute_bitwise_vector(word_counts, hashed_words)
+    hashed_words = _hash_text(page_text)
+    word_counts = _count_raw_words(page_text)
+    vector = _compute_bitwise_vector(word_counts, hashed_words)
 
     # Convert the bitwise vector to binary string fingerprint
     fingerprint = "".join("1" if x > 0 else "0" for x in vector)
@@ -446,7 +453,76 @@ def is_duplicate_page(page_text: str) -> bool:
     SIMHASHES.add(fingerprint)
     return False
 
+
+
+# functions for simHash, might move to a separate file later
+def _get_64bit_hash(word: str) -> str:
+    """Helper function to get the hash in bits so that we have a unique code """
+    hash_bytes = hashlib.md5(word.encode("utf-8")).digest()
+    hash_value = int.from_bytes(hash_bytes[:8], byteorder="big")
+    return f"{hash_value:064b}"
+
+def _hash_text(text: str) -> dict[str, str]:
+    """
+    Helper function that hashes the full text and returns a dictionary containing each word's unique hash
+    """
+    punctuation = "'!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
+    # translate strips out unwanted punctuation in O(n) time
+    cleaned_text = text.lower().translate(str.maketrans("", "", punctuation))
+    words = cleaned_text.split()
+
+    hashed_words = {}
+
+    for word in words:
+        if word in hashed_words:
+            pass
+        else:
+            hashed_words[word] = _get_64bit_hash(word)
+    return hashed_words
+
+def _count_raw_words(text: str) -> dict[str, int]:
+    """
+    Helper function to count the frequency of each words in a text, and returns a dictionary containing the counts.
+    """
+    punctuation = "'!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
+    # translate strips out unwanted punctuation in O(n) time
+    cleaned_text = text.lower().translate(str.maketrans("","", punctuation))
+    words = cleaned_text.split()
+
+    word_counts = {}
+
+    for word in words:
+        word_counts[word] = word_counts.get(word, 0) + 1
+
+    return word_counts
+
+def _compute_bitwise_vector(word_counts: dict[str, int], hashed_words: dict[str, str]):
+    """
+    Computes the bitwise vector for simHashing in O(n * B) time, where n is the
+    number of unique words and B is the bit length (8)
+    """
+
+    v = [0] * 64
+
+    for word, weight in word_counts.items():
+        # Integer hash, since hashed_words is a string
+        h = int(hashed_words[word], 2)
+
+        for i in range(64):
+            # Checking if the ith bit from the right is 1, if it is then increment weight
+            if (h >> (63 - i)) & 1:
+                v[i] += weight
+            else:
+                v[i] -= weight
+    return v
+
+
+
 def print_crawl_analytics():
+    """
+    Prints out the results of the crawl
+    """
+
     print("=" * 50)
     print("CRAWL SUMMARY & ANSWERS")
     print("=" * 50)
@@ -467,67 +543,6 @@ def print_crawl_analytics():
     for subdomain in sorted(SUBDOMAIN_PAGE_MAP.keys()):
         count = len(SUBDOMAIN_PAGE_MAP[subdomain])
         print(f"   {subdomain}, {count}")
-
-# functions for simHash, might move to a separate file later
-def get_64bit_hash(word: str) -> str:
-    """ Gets the hash in bits so that we have a unique code """
-    hash_bytes = hashlib.md5(word.encode("utf-8")).digest()
-    hash_value = int.from_bytes(hash_bytes[:8], byteorder="big")
-    return f"{hash_value:064b}"
-
-def hash_text(text: str) -> dict[str, str]:
-    """
-    Hashes the full text, and returns a dictionary containing each word's unique hash
-    """
-    punctuation = "'!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
-    # translate strips out unwanted punctuation in O(n) time
-    cleaned_text = text.lower().translate(str.maketrans("", "", punctuation))
-    words = cleaned_text.split()
-
-    hashed_words = {}
-
-    for word in words:
-        if word in hashed_words:
-            pass
-        else:
-            hashed_words[word] = get_64bit_hash(word)
-    return hashed_words
-
-def count_raw_words(text: str) -> dict[str, int]:
-    """
-    Counts the frequency of each words in a text, and returns a dictionary containing the counts.
-    """
-    punctuation = "'!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
-    # translate strips out unwanted punctuation in O(n) time
-    cleaned_text = text.lower().translate(str.maketrans("","", punctuation))
-    words = cleaned_text.split()
-
-    word_counts = {}
-
-    for word in words:
-        word_counts[word] = word_counts.get(word, 0) + 1
-
-    return word_counts
-
-def compute_bitwise_vector(word_counts: dict[str, int], hashed_words: dict[str, str]):
-    """
-    Computes the bitwise vector for simHashing in O(n * B) time, where n is the
-    number of unique words and B is the bit length (8)
-    """
-
-    v = [0] * 64
-
-    for word, weight in word_counts.items():
-        # Integer hash, since hashed_words is a string
-        h = int(hashed_words[word], 2)
-
-        for i in range(64):
-            # Checking if the ith bit from the right is 1, if it is then increment weight
-            if (h >> (63 - i)) & 1:
-                v[i] += weight
-            else:
-                v[i] -= weight
-    return v
 
 ANALYTICS_FILE = "crawl_analytics.pkl"
 
