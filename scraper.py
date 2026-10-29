@@ -12,6 +12,7 @@ from bs4 import BeautifulSoup
 from collections import Counter
 
 MAX_BYTES = 5_000_000
+COUNTED_TEXT_URLS = set()
 # Global set to store seen 8-bit fingerprints across the crawl
 SIMHASHES = set()
 # Cache dictionary to store rfp instances per domain
@@ -88,12 +89,24 @@ def extract_next_links(url, resp) -> list:
         if ctype and "html" not in ctype:
             return []
 
+        content_start = raw_response.content[:1024].lstrip().lower()
+
+        if content_start.startswith((b"%pdf-", b"pk\x03\x04", b"\x89png",b"\xff\xd8\xff")): return[]
+        if b"\x00" in raw_response.content[:4096]: return[]
+
         # Skip unusually large responses
         if len(raw_response.content) > MAX_BYTES:
             return []
 
+        # stop expanding duplicate paginated pages
+        if is_duplicate and re.search(r"/page/\d+(?:/|$)", urlparse(clean_url).path):
+            return []
+          
         # Parse HTML body content using BeautifulSoup and Python's build-in html.parser function
         html_parser = BeautifulSoup(raw_response.content, "html.parser")
+
+        if html_parser.find(["html", "head", "body"]) is None:
+            return []
 
         track_unique_pages(clean_url) # Handles Q1
         track_longest_page_and_common_words(clean_url, html_parser) # Handles Q2 & Q3
@@ -145,38 +158,41 @@ def track_longest_page_and_common_words(clean_url, html_parser) -> None:
     global LONGEST_PAGE
 
     # Get plain text from HTML and check if fingerprint matches a previously seen page
-    page_text = html_parser.get_text()
+    for element in html_parser(["script", "style", "noscript", "template"]): element.decompose()
+    page_text = html_parser.get_text(separator=" ", strip=True)
     is_duplicate = is_duplicate_page(page_text)
 
     # Clean text to extract words in O(n) time
     punctuation = "'!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
 
-    if not is_duplicate:
-        cleaned_text = page_text.lower().translate(str.maketrans("", "", punctuation))
-        words = [w for w in re.findall(r"[a-z0-9]+(?:'[a-z0-9]+)*", page_text.lower()) if
-                 len(w) > 1]
+    words = [
+        w
+        for w in re.findall(r"[a-z0-9]+(?:'[a-z0-9]+)*", page_text.lower())
+        if w
+    ]
 
-        # Check for longest page for Q2 in deliverables
-        word_count = len(words)
-        if word_count > LONGEST_PAGE[1]:
-            LONGEST_PAGE = (clean_url, word_count)
+    word_count = len(words)
 
-        # Filter stop words and record frequencies across pages for Q3 in deliverables
+    if word_count > LONGEST_PAGE[1]:
+        LONGEST_PAGE = (clean_url, word_count)
+
+    if clean_url not in COUNTED_TEXT_URLS:
         non_stop_words = [w for w in words if w not in STOP_WORDS]
         WORD_FREQUENCIES.update(non_stop_words)
+        COUNTED_TEXT_URLS.add(clean_url)
 
 def track_subdomains(clean_url) -> None:
     """
     Stores the number of subdomains paired with
     the number of unique pages in each one in a dict
     """
-
+    
     # Subdomain tracking for ics.uci.edu for Q4 in deliverables
     parsed_url = urlparse(clean_url)
     hostname = parsed_url.hostname or ""
     
-    if hostname.endswith(".ics.uci.edu") or hostname == "ics.uci.edu":
-        subdomain_key = f'{parsed_url.scheme}://{hostname}'
+    if hostname.endswith(".ics.uci.edu"): # can't include the root domain, since the assignment asked for subdomains
+        subdomain_key = hostname
 
         # Not in the map yet, create a set to keep track of unique subdomains.
         if subdomain_key not in SUBDOMAIN_PAGE_MAP:
@@ -190,20 +206,27 @@ def _extract_from_html(base_url, html_parser) -> list:
     # Use set to eliminate dupes
     url_set = set()
 
-    # Iterate over all anchor tags (<a>) found in the parsed HTML document
+    # extract links and skip malformed URLs w/o stopping the page
     for link in html_parser.find_all('a'):
+        href = link.get('href')
 
-        # Extract 'href' attribute string and trim whitespace
-        href = link.get('href', '').strip()
-        # Skip empty href attributes or non HTTP schemes
-        if href and not href.startswith(('javascript:', 'mailto:', 'tel:')):
-            # Convert relative path URLS into absolute URLs
+        if not isinstance(href, str):
+            continue
+
+        href = href.strip()
+
+        if not href or href.lower().startswith(('javascript:', 'mailto:', 'tel:')): continue
+
+        try:
             absolute_url = urljoin(base_url, href)
-            # Strip out fragment identifiers
             absolute_url = urldefrag(absolute_url)[0]
 
             if is_valid(absolute_url):
-                url_set.append(absolute_url)
+                url_list.append(absolute_url)
+
+        except(ValueError, TypeError):
+            #ignore malformed links and continue processing the page
+            continue
     # Convert to list
     return list(url_set)
     # Otherwise, return empty list
@@ -239,6 +262,32 @@ def is_allowed_by_bots(url, user_agent = '*'):
         # If there is an error, default to true to avoid blocking valid URLs
         return True
 
+def is_calendar_trap(url):
+    # get the url path and split it into separated parts
+    parsed = urlparse(url)
+    path = parsed.path.lower().rstrip("/")
+    segments = [s for s in path.split("/") if s]
+
+    #check for calendar export links
+    query_keys = {key.lower() for key, _ in parse_qsl(parsed.query, keep_blank_values=True)}
+
+    if query_keys & {"ical", "outlook-ical", "google-calendar"}: return True
+    # on check dates if the url looks like a calendar page
+    if not any(s in {"events", "calendar", "calendars"} for s in segments): return False
+
+    #check for dates like 2025-10-10
+    for segment in segments:
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", segment): return True
+
+    #check for dates after day or week in the url
+    for i, segment in enumerate(segments):
+        if segment in {"day", "week"} and i + 1 < len(segments):
+            if re.fullmatch(r"\d{4}(?:-\d{2})?(?:-\d{2})?", segments[i + 1]):
+                return True
+    
+    # no calendar trap found
+    return False
+
 
 def is_valid(url):
     """
@@ -257,17 +306,27 @@ def is_valid(url):
         parsed = urlparse(url)
         hostname = (parsed.hostname or "").lower()
 
-        # skip DokuWiki actions that generate many versions of the same page
-        if hostname == "wiki.ics.uci.edu":
-            params = parse_qsl(parsed.query, keep_blank_values=True)
+        # block non-content DokuWiki actions on any allowed subdomain
+        path = parsed.path.lower()
+        query_pairs = parse_qsl(parsed.query, keep_blank_values=True)
+        query_keys = {name.lower() for name, _ in query_pairs}
 
+        if path.startswith("/doku.php"):
             blocked_params = {
-                "rev", "idx", "oldid", "tab_files",
-                "tab_details", "do"
+                "do", "rev", "rev2", "oldid", "idx",
+                "tab_files", "tab_details", "image", "difftype"
             }
 
-            if any(name.lower() in blocked_params for name, value in params):
+            if query_keys & blocked_params:
                 return False
+
+            if any(name.startswith("rev2[") for name in query_keys):
+                return False
+
+        # block URL parameters used for non-content actions
+        if query_keys & {"action", "replytocom", "sessionid", "phpsessid"}:
+            return False
+
         # AVOID combinatorial filter URLs on ICS listing pages
         if parsed.hostname == "ics.uci.edu":
             if parsed.path.rstrip("/") in (
@@ -298,6 +357,23 @@ def is_valid(url):
         if not any(hostname == domain or (hostname or "").endswith("." + domain) for domain in allowed_domains):
             return False
 
+        # skip calendar pages that keep generating different dates
+        if is_calendar_trap(url):
+            return False
+
+        # reject calendar exports and generated daily calendar pages
+        query_keys = {
+            key.lower()
+            for key, _ in parse_qsl(parsed.query, keep_blank_values=True)
+        }
+
+        if query_keys & {"ical", "outlook-ical", "google-calendar"}:
+            return False
+
+        path = parsed.path.lower()
+
+        if re.search(r"/(?:events|calendar)(?:/[^?#]*)?/\d{4}-\d{2}-\d{2}(?:/|$)", path): return False
+
         path = parsed.path.lower()
 
         # Handles infinite folder recursion traps (/a/b/a/b/a/b)
@@ -311,6 +387,7 @@ def is_valid(url):
 
         query = parsed.query.lower()
         full_url = url.lower()
+        # Keywords that are commonly associated in traps
         trap_keywords = [
             'calendar', 'event', 'date', 'action=edit', 'action=download', 'replytocom',
             'share=', 'login', 'auth', 'filter', 'sort='
@@ -329,6 +406,7 @@ def is_valid(url):
             + r"|data|dat|exe|bz2|tar|msi|bin|7z|psd|dmg|iso"
             + r"|epub|dll|cnf|tgz|sha1|apk|sql|json|xml|war|py"
             + r"|thmx|mso|arff|rtf|jar|csv|cpp|c|java|ics"
+            + r"|ova|vmdk|vdi|qcow2|img"
             + r"|rm|smil|wmv|swf|wma|zip|rar|gz)$",
             path
         ):
@@ -346,9 +424,10 @@ def is_duplicate_page(page_text: str) -> bool:
     Exact and near-duplicates will produce identical or nearly identical fingerprints.
     Threshold: Hamming distance <= 1 (will be 0 for exact matches)
     """
-
+    # If the page is empty or missing, it is a duplicate and we can safely skip it.
     if not page_text or not page_text.strip():
         return True
+    # Use the below helper functions to calculate the vector and create the fingerprint.
     hashed_words = hash_text(page_text)
     word_counts = count_raw_words(page_text)
     vector = compute_bitwise_vector(word_counts, hashed_words)
@@ -391,6 +470,7 @@ def print_crawl_analytics():
 
 # functions for simHash, might move to a separate file later
 def get_64bit_hash(word: str) -> str:
+    """ Gets the hash in bits so that we have a unique code """
     hash_bytes = hashlib.md5(word.encode("utf-8")).digest()
     hash_value = int.from_bytes(hash_bytes[:8], byteorder="big")
     return f"{hash_value:064b}"
@@ -463,6 +543,7 @@ def save_analytics():
         "WORD_FREQUENCIES": WORD_FREQUENCIES,
         "SUBDOMAIN_PAGE_MAP": SUBDOMAIN_PAGE_MAP,
         "SIMHASHES": SIMHASHES,
+        "COUNTED_TEXT_URLS": COUNTED_TEXT_URLS,
     }
 
     # write to a temporary file first so an interrupted save
@@ -488,6 +569,7 @@ def load_analytics(restart=False):
         WORD_FREQUENCIES.clear()
         SUBDOMAIN_PAGE_MAP.clear()
         SIMHASHES.clear()
+        COUNTED_TEXT_URLS.clear()
         return
 
     # If this is the first run, there won't be anything to load yet
@@ -505,13 +587,22 @@ def load_analytics(restart=False):
     # Restore the longest page found so far
     LONGEST_PAGE = data["LONGEST_PAGE"]
 
+    # introduced a new function that prevent counting the same URL's text more than once
+    COUNTED_TEXT_URLS.clear()
+    COUNTED_TEXT_URLS.update(data.get("COUNTED_TEXT_URLS", data["UNIQUE_URLS"]))
+
     # Restore the word frequencies
     WORD_FREQUENCIES.clear()
     WORD_FREQUENCIES.update(data["WORD_FREQUENCIES"])
 
     # Restore the subdomain page counts
     SUBDOMAIN_PAGE_MAP.clear()
-    SUBDOMAIN_PAGE_MAP.update(data["SUBDOMAIN_PAGE_MAP"])
+
+    #merge http and https entries while still retaining unique urls
+    for old_key, urls in data["SUBDOMAIN_PAGE_MAP"].items():
+        hostname = urlparse(old_key).hostname or old_key
+        if hostname.endswith(".ics.uci.edu"):
+            SUBDOMAIN_PAGE_MAP.setdefault(hostname, set()).update(urls)
 
     # Restore the fingerprints used to detect similar pages
     SIMHASHES.clear()

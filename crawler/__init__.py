@@ -11,11 +11,19 @@ class Crawler(object):
         self.worker_factory = worker_factory
 
     def start_async(self):
+        print("DEBUG: Creating workers", flush=True)
+
         self.workers = [
             self.worker_factory(worker_id, self.config, self.frontier)
-            for worker_id in range(self.config.threads_count)]
+            for worker_id in range(self.config.threads_count)
+        ]
+
+        print("DEBUG: Workers created", flush=True)
+
         for worker in self.workers:
             worker.start()
+
+        print("DEBUG: Workers started", flush=True)
 
     def start(self):
         self.start_async()
