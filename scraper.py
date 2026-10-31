@@ -11,12 +11,14 @@ from urllib.parse import urlparse, parse_qsl
 from bs4 import BeautifulSoup
 from collections import Counter
 
+
+
 MAX_BYTES = 5_000_000
 COUNTED_TEXT_URLS = set()
 # Global set to store seen 8-bit fingerprints across the crawl
 SIMHASHES = set()
 # Cache dictionary to store rfp instances per domain
-ROBOTS_CACHE = {}
+ROBOTS_CACHE = dict()
 # 1. Unique URLs found
 UNIQUE_URLS = set()
 # 2. Longest page tracking
@@ -24,7 +26,7 @@ LONGEST_PAGE = ("", 0)
 # 3. Frequency counter for overall words
 WORD_FREQUENCIES = Counter()
 # 4. Dictionary mapping subdomains to sets of unique pages
-SUBDOMAIN_PAGE_MAP = {}
+SUBDOMAIN_PAGE_MAP = dict()
 # English stop words
 STOP_WORDS = {
     "a", "about", "above", "after", "again", "against", "all", "am", "an", "and", "any", "are", "aren't",
@@ -43,13 +45,22 @@ STOP_WORDS = {
     "where", "where's", "which", "while", "who", "who's", "whom", "why", "why's", "with", "won't",
     "would", "wouldn't", "you", "you'd", "you'll", "you're", "you've", "your", "yours", "yourself", "yourselves"
 }
-def scraper(url, resp):
+
+
+
+def scraper(url, resp) -> list:
+    """
+    Processes the page the URL links to
+    """
     if resp is None:
         return []
 
     return extract_next_links(url, resp)
 
-def extract_next_links(url, resp):
+def extract_next_links(url, resp) -> list:
+    """
+    Returns a list of URLS found in the given page
+    """
     # Implementation required.
     # url: the URL that was used to get the page
     # resp.url: the actual url of the page
@@ -59,10 +70,6 @@ def extract_next_links(url, resp):
     #         resp.raw_response.url: the url, again
     #         resp.raw_response.content: the content of the page!
     # Return a list with the hyperlinks (as strings) scrapped from resp.raw_response.content
-    
-    # updates the overall longest-page tupe, so therefore can't be a local variable
-    global LONGEST_PAGE
-    url_list = []
 
     # Page requested properly (Successful response)
     if resp.status == 200:
@@ -77,7 +84,7 @@ def extract_next_links(url, resp):
         base_url = getattr(raw_response, "url", None) or resp.url or url
         clean_url = urldefrag(base_url)[0]
 
-        # check the final URL in case the request was redirected
+        # Check the final URL in case the request was redirected
         if not is_valid(clean_url):
             return []
 
@@ -95,77 +102,21 @@ def extract_next_links(url, resp):
         if len(raw_response.content) > MAX_BYTES:
             return []
 
-        # Tracking for Q1 in deliverables
-        UNIQUE_URLS.add(clean_url)
-        # Subdomain tracking for ics.uci.edu for Q4 in deliverables
-        parsed_url = urlparse(clean_url)
-        hostname = parsed_url.hostname or ""
-        if hostname.endswith(".ics.uci.edu"): # can't include the root domain, since the assignment asked for subdomains
-            subdomain_key = hostname
-            # Not in the map yet, create a set to keep track of unique subdomains.
-            if subdomain_key not in SUBDOMAIN_PAGE_MAP:
-                SUBDOMAIN_PAGE_MAP[subdomain_key] = set()
-            SUBDOMAIN_PAGE_MAP[subdomain_key].add(clean_url)
-
-
+        # stop expanding duplicate paginated pages
+        if is_duplicate and re.search(r"/page/\d+(?:/|$)", urlparse(clean_url).path):
+            return []
+          
         # Parse HTML body content using BeautifulSoup and Python's build-in html.parser function
         html_parser = BeautifulSoup(raw_response.content, "html.parser")
 
         if html_parser.find(["html", "head", "body"]) is None:
             return []
 
-        # Get plain text from HTML and check if fingerprint matches a previously seen page
-        for element in html_parser(["script", "style", "noscript", "template"]): element.decompose()
-        page_text = html_parser.get_text(separator=" ", strip=True)
-        is_duplicate = is_duplicate_page(page_text)
-
-        # Clean text to extract words in O(n) time
-        punctuation = "'!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
-
-        words = [
-            w
-            for w in re.findall(r"[a-z0-9]+(?:'[a-z0-9]+)*", page_text.lower())
-            if w
-        ]
-
-        word_count = len(words)
-
-        if word_count > LONGEST_PAGE[1]:
-            LONGEST_PAGE = (clean_url, word_count)
-
-        if clean_url not in COUNTED_TEXT_URLS:
-            non_stop_words = [w for w in words if w not in STOP_WORDS]
-            WORD_FREQUENCIES.update(non_stop_words)
-            COUNTED_TEXT_URLS.add(clean_url)
-
-        # stop expanding duplicate paginated pages
-        if is_duplicate and re.search(r"/page/\d+(?:/|$)", urlparse(clean_url).path):
-            return []
-
-        # extract links and skip malformed URLs w/o stopping the page
-        for link in html_parser.find_all('a'):
-            href = link.get('href')
-
-            if not isinstance(href, str):
-                continue
-
-            href = href.strip()
-
-            if not href or href.lower().startswith(('javascript:', 'mailto:', 'tel:')): continue
-
-            try:
-                absolute_url = urljoin(base_url, href)
-                absolute_url = urldefrag(absolute_url)[0]
-
-                if is_valid(absolute_url):
-                    url_list.append(absolute_url)
-
-            except(ValueError, TypeError):
-                #ignore malformed links and continue processing the page
-                continue
-        # Convert list to set to eliminate dupes then back
-        return list(set(url_list))
-        # Otherwise, return empty list
+        track_unique_pages(clean_url) # Handles Q1
+        track_longest_page_and_common_words(clean_url, html_parser) # Handles Q2 & Q3
+        track_subdomains(clean_url) # Handles Q4
+        
+        return _extract_from_html(base_url, html_parser) # Returns 
 
     # Check error and handle crashes appropriately
     # Handle redirects that were not automatically followed
@@ -174,7 +125,7 @@ def extract_next_links(url, resp):
         raw_response = resp.raw_response
         if raw_response is None:
             return []
-        
+
         # Read the redirect destination from the response headers
         headers = getattr(raw_response, "headers", {})
         # Accounts for case-insensitive header keys
@@ -182,7 +133,7 @@ def extract_next_links(url, resp):
 
         if not location:
             return []
-        
+
         # Find the absolute URL of the redirect destination
         base_url = getattr(raw_response, "url", None) or resp.url or url
         redirect_url = urljoin(base_url, location)
@@ -191,70 +142,105 @@ def extract_next_links(url, resp):
 
         if is_valid(redirect_url):
             return [redirect_url]
-        
 
     return []
 
-
-
-def is_allowed_by_bots(url, user_agent = '*'):
+def track_unique_pages(clean_url) -> None:
     """
-    Helper function to get robots.txt for a domain, then see if the URL can be crawled
+    Stores unique urls in a set
     """
-    try:
-        parsed = urlparse(url)
-        # Make the base domain URL (https://networklocation)
-        domain = f'{parsed.scheme}://{parsed.netloc}'
-        robots_url = urljoin(domain, '/robots.txt')
 
-        if domain not in ROBOTS_CACHE:
-            rfp = RobotFileParser()
-            rfp.set_url(robots_url)
-            try:
-                rfp.read()
-                ROBOTS_CACHE[domain] = rfp
-            # Specifically catches web request timeouts, HTTP failures, connection issues, or URL parsing errors
-            except (URLError, HTTPError, OSError, ValueError):
-                # if robots.txt does not load, default to that the site allows us to crawl
-                ROBOTS_CACHE[domain] = None
+    # Tracking for Q1 in deliverables
+    UNIQUE_URLS.add(clean_url)
 
-        # return permission check using cached RobotFileParser
-        if ROBOTS_CACHE[domain] is not None:
-            return ROBOTS_CACHE[domain].can_fetch(user_agent, url)
-        return True
-    except (URLError, HTTPError, OSError, ValueError):
-        # If there is an error, default to true to avoid blocking valid URLs
-        return True
+def track_longest_page_and_common_words(clean_url, html_parser) -> None:
+    """
+    Updates longest page and records frequencies of 50 most common words
+    """
 
-def is_calendar_trap(url):
-    # get the url path and split it into separated parts
-    parsed = urlparse(url)
-    path = parsed.path.lower().rstrip("/")
-    segments = [s for s in path.split("/") if s]
+    # updates the overall longest-page tuple, so therefore can't be a local variable
+    global LONGEST_PAGE
 
-    #check for calendar export links
-    query_keys = {key.lower() for key, _ in parse_qsl(parsed.query, keep_blank_values=True)}
+    # Get plain text from HTML and check if fingerprint matches a previously seen page
+    for element in html_parser(["script", "style", "noscript", "template"]): element.decompose()
+    page_text = html_parser.get_text(separator=" ", strip=True)
+    is_duplicate = _is_duplicate_page(page_text)
 
-    if query_keys & {"ical", "outlook-ical", "google-calendar"}: return True
-    # on check dates if the url looks like a calendar page
-    if not any(s in {"events", "calendar", "calendars"} for s in segments): return False
+    # Clean text to extract words in O(n) time
+    punctuation = "'!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
 
-    #check for dates like 2025-10-10
-    for segment in segments:
-        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", segment): return True
+    words = [
+        w
+        for w in re.findall(r"[a-z0-9]+(?:'[a-z0-9]+)*", page_text.lower())
+        if w
+    ]
 
-    #check for dates after day or week in the url
-    for i, segment in enumerate(segments):
-        if segment in {"day", "week"} and i + 1 < len(segments):
-            if re.fullmatch(r"\d{4}(?:-\d{2})?(?:-\d{2})?", segments[i + 1]):
-                return True
+    word_count = len(words)
+
+    if word_count > LONGEST_PAGE[1]:
+        LONGEST_PAGE = (clean_url, word_count)
+
+    if clean_url not in COUNTED_TEXT_URLS:
+        non_stop_words = [w for w in words if w not in STOP_WORDS]
+        WORD_FREQUENCIES.update(non_stop_words)
+        COUNTED_TEXT_URLS.add(clean_url)
+
+def track_subdomains(clean_url) -> None:
+    """
+    Stores the number of subdomains paired with the number of unique pages in each one in a dict
+    """
     
-    # no calendar trap found
-    return False
+    # Subdomain tracking for ics.uci.edu for Q4 in deliverables
+    parsed_url = urlparse(clean_url)
+    hostname = parsed_url.hostname or ""
+    
+    if hostname.endswith(".ics.uci.edu"): # can't include the root domain, since the assignment asked for subdomains
+        subdomain_key = hostname
+
+        # Not in the map yet, create a set to keep track of unique subdomains.
+        if subdomain_key not in SUBDOMAIN_PAGE_MAP:
+            SUBDOMAIN_PAGE_MAP[subdomain_key] = set()
+        SUBDOMAIN_PAGE_MAP[subdomain_key].add(clean_url)
+
+def _extract_from_html(base_url, html_parser) -> list:
+    """
+    Helper function for extract_next_links. Finds and parses links found in HTML
+    """
+    # Use set to eliminate dupes
+    url_set = set()
+
+    # extract links and skip malformed URLs w/o stopping the page
+    for link in html_parser.find_all('a'):
+        href = link.get('href')
+
+        if not isinstance(href, str):
+            continue
+
+        href = href.strip()
+
+        if not href or href.lower().startswith(('javascript:', 'mailto:', 'tel:')): continue
+
+        try:
+            absolute_url = urljoin(base_url, href)
+            absolute_url = urldefrag(absolute_url)[0]
+
+            if is_valid(absolute_url):
+                url_list.append(absolute_url)
+
+        except(ValueError, TypeError):
+            #ignore malformed links and continue processing the page
+            continue
+    # Convert to list
+    return list(url_set)
+    # Otherwise, return empty list
 
 
-def is_valid(url):
-    # Decide whether to crawl this url or not. 
+
+def is_valid(url) -> bool:
+    """
+    Decide whether to crawl this url or not.
+    """
+
     # If you decide to crawl it, return True; otherwise return False.
     # There are already some conditions that return False.
     try:
@@ -320,7 +306,7 @@ def is_valid(url):
             return False
 
         # skip calendar pages that keep generating different dates
-        if is_calendar_trap(url):
+        if _is_calendar_trap(url):
             return False
 
         # reject calendar exports and generated daily calendar pages
@@ -349,6 +335,7 @@ def is_valid(url):
 
         query = parsed.query.lower()
         full_url = url.lower()
+        # Keywords that are commonly associated in traps
         trap_keywords = [
             'calendar', 'event', 'date', 'action=edit', 'action=download', 'replytocom',
             'share=', 'login', 'auth', 'filter', 'sort='
@@ -393,18 +380,78 @@ def is_valid(url):
         print("TypeError for ", url)
         return False
 
-def is_duplicate_page(page_text: str) -> bool:
+def _is_allowed_by_bots(url, user_agent = '*') -> bool:
     """
-    Detects webpage duplicates using SimHash fingerprinting
+    Helper function to get robots.txt for a domain, then see if the URL can be crawled
+    """
+    try:
+        parsed = urlparse(url)
+        # Make the base domain URL (https://networklocation)
+        domain = f'{parsed.scheme}://{parsed.netloc}'
+        robots_url = urljoin(domain, '/robots.txt')
+
+        if domain not in ROBOTS_CACHE:
+            rfp = RobotFileParser()
+            rfp.set_url(robots_url)
+            try:
+                rfp.read()
+                ROBOTS_CACHE[domain] = rfp
+            # Specifically catches web request timeouts, HTTP failures, connection issues, or URL parsing errors
+            except (URLError, HTTPError, OSError, ValueError):
+                # if robots.txt does not load, default to that the site allows us to crawl
+                ROBOTS_CACHE[domain] = None
+
+        # return permission check using cached RobotFileParser
+        if ROBOTS_CACHE[domain] is not None:
+            return ROBOTS_CACHE[domain].can_fetch(user_agent, url)
+        return True
+    except (URLError, HTTPError, OSError, ValueError):
+        # If there is an error, default to true to avoid blocking valid URLs
+        return True
+
+def _is_calendar_trap(url) -> bool:
+    """
+    Helper function to check if url is a calendar trap
+    """
+
+    # get the url path and split it into separated parts
+    parsed = urlparse(url)
+    path = parsed.path.lower().rstrip("/")
+    segments = [s for s in path.split("/") if s]
+
+    #check for calendar export links
+    query_keys = {key.lower() for key, _ in parse_qsl(parsed.query, keep_blank_values=True)}
+
+    if query_keys & {"ical", "outlook-ical", "google-calendar"}: return True
+    # on check dates if the url looks like a calendar page
+    if not any(s in {"events", "calendar", "calendars"} for s in segments): return False
+
+    #check for dates like 2025-10-10
+    for segment in segments:
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}", segment): return True
+
+    #check for dates after day or week in the url
+    for i, segment in enumerate(segments):
+        if segment in {"day", "week"} and i + 1 < len(segments):
+            if re.fullmatch(r"\d{4}(?:-\d{2})?(?:-\d{2})?", segments[i + 1]):
+                return True
+    
+    # no calendar trap found
+    return False
+
+def _is_duplicate_page(page_text: str) -> bool:
+    """
+    Helper function to detect webpage duplicates using SimHash fingerprinting
     Exact and near-duplicates will produce identical or nearly identical fingerprints.
     Threshold: Hamming distance <= 1 (will be 0 for exact matches)
     """
-
+    # If the page is empty or missing, it is a duplicate and we can safely skip it.
     if not page_text or not page_text.strip():
         return True
-    hashed_words = hash_text(page_text)
-    word_counts = count_raw_words(page_text)
-    vector = compute_bitwise_vector(word_counts, hashed_words)
+    # Use the below helper functions to calculate the vector and create the fingerprint.
+    hashed_words = _hash_text(page_text)
+    word_counts = _count_raw_words(page_text)
+    vector = _compute_bitwise_vector(word_counts, hashed_words)
 
     # Convert the bitwise vector to binary string fingerprint
     fingerprint = "".join("1" if x > 0 else "0" for x in vector)
@@ -441,13 +488,16 @@ def print_crawl_analytics():
         print(f"   {rank}. {word}: {freq}")
 
 # functions for simHash, might move to a separate file later
-def get_64bit_hash(word: str) -> str:
+def _get_64bit_hash(word: str) -> str:
+    """Helper function to get the hash in bits so that we have a unique code """
     hash_bytes = hashlib.md5(word.encode("utf-8")).digest()
     hash_value = int.from_bytes(hash_bytes[:8], byteorder="big")
     return f"{hash_value:064b}"
 
-def hash_text(text: str) -> dict[str, str]:
-    """ Hashes the full text, and returns a dictionary containing each word's unique hash"""
+def _hash_text(text: str) -> dict[str, str]:
+    """
+    Helper function that hashes the full text and returns a dictionary containing each word's unique hash
+    """
     punctuation = "'!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
     # translate strips out unwanted punctuation in O(n) time
     cleaned_text = text.lower().translate(str.maketrans("", "", punctuation))
@@ -459,12 +509,12 @@ def hash_text(text: str) -> dict[str, str]:
         if word in hashed_words:
             pass
         else:
-            hashed_words[word] = get_64bit_hash(word)
+            hashed_words[word] = _get_64bit_hash(word)
     return hashed_words
 
-def count_raw_words(text: str) -> dict[str, int]:
+def _count_raw_words(text: str) -> dict[str, int]:
     """
-    Counts the frequency of each words in a text, and returns a dictionary containing the counts.
+    Helper function to count the frequency of each words in a text, and returns a dictionary containing the counts.
     """
     punctuation = "'!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~"
     # translate strips out unwanted punctuation in O(n) time
@@ -478,7 +528,7 @@ def count_raw_words(text: str) -> dict[str, int]:
 
     return word_counts
 
-def compute_bitwise_vector(word_counts: dict[str, int], hashed_words: dict[str, str]):
+def _compute_bitwise_vector(word_counts: dict[str, int], hashed_words: dict[str, str]):
     """
     Computes the bitwise vector for simHashing in O(n * B) time, where n is the
     number of unique words and B is the bit length (8)
@@ -498,9 +548,41 @@ def compute_bitwise_vector(word_counts: dict[str, int], hashed_words: dict[str, 
                 v[i] -= weight
     return v
 
+
+
+def print_crawl_analytics():
+    """
+    Prints out the results of the crawl
+    """
+
+    print("=" * 50)
+    print("CRAWL SUMMARY & ANSWERS")
+    print("=" * 50)
+
+    # Q1: Total Unique Pages
+    print(f"\n1. Total Unique Pages Found: {len(UNIQUE_URLS)}")
+
+    # Q2: Longest Page
+    print(f"\n2. Longest Page: {LONGEST_PAGE[0]} with {LONGEST_PAGE[1]} words")
+
+    # Q3: 50 Most Common Words
+    print("\n3. Top 50 Most Common Words (excluding stop words):")
+    for rank, (word, freq) in enumerate(WORD_FREQUENCIES.most_common(50), 1):
+        print(f"   {rank}. {word}: {freq}")
+
+    # Q4: Subdomains in ics.uci.edu
+    print("\n4. Subdomains in ics.uci.edu (alphabetical):")
+    for subdomain in sorted(SUBDOMAIN_PAGE_MAP.keys()):
+        count = len(SUBDOMAIN_PAGE_MAP[subdomain])
+        print(f"   {subdomain}, {count}")
+
 ANALYTICS_FILE = "crawl_analytics.pkl"
 
 def save_analytics():
+    """
+    Write all data into a .log file
+    """
+
     # keep all the crawl statistics together so we can save them in one file
     data = {
         "UNIQUE_URLS": UNIQUE_URLS,
