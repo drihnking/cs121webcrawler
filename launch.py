@@ -27,7 +27,7 @@ def main(config_file, restart):
         crawler.start()
         print("DEBUG: Crawler workers finished", flush=True)
     finally:
-        # Prints deliverable data when crawling is done or stopped by Ctrl + C
+        # prints deliverable data when crawling is done or stopped by Ctrl + C
         save_analytics()
         print_crawl_analytics()
 

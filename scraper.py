@@ -372,7 +372,21 @@ def is_valid(url):
             path
         ):
             return False
+        
+        # skip repetitive photo gallery pages
+        # keep the eppstein publications since they have useful text
+        if hostname in {"ics.uci.edu", "www.ics.uci.edu"}:
+            if path.startswith("/~eppstein/pix/"):
+                if path != "/~eppstein/pix/index.html":
+                    return False
 
+        # avoid monthly calendar archives that repeat event listings
+        segments = [s for s in path.split("/") if s]
+
+        if any(s in {"events", "calendar", "calendars"} for s in segments):
+            if any(re.fullmatch(r"\d{4}-\d{2}", s) for s in segments):
+                return False
+        
         return True
 
     except TypeError:
@@ -407,26 +421,24 @@ def is_duplicate_page(page_text: str) -> bool:
     return False
 
 def print_crawl_analytics():
-    print("=" * 50)
-    print("CRAWL SUMMARY & ANSWERS")
-    print("=" * 50)
-
-    # Q1: Total Unique Pages
-    print(f"\n1. Total Unique Pages Found: {len(UNIQUE_URLS)}")
-
-    # Q2: Longest Page
-    print(f"\n2. Longest Page: {LONGEST_PAGE[0]} with {LONGEST_PAGE[1]} words")
-
-    # Q3: 50 Most Common Words
+    # q3: show the most common words without numbers or stop words
     print("\n3. Top 50 Most Common Words (excluding stop words):")
-    for rank, (word, freq) in enumerate(WORD_FREQUENCIES.most_common(50), 1):
-        print(f"   {rank}. {word}: {freq}")
 
-    # Q4: Subdomains in ics.uci.edu
-    print("\n4. Subdomains in ics.uci.edu (alphabetical):")
-    for subdomain in sorted(SUBDOMAIN_PAGE_MAP.keys()):
-        count = len(SUBDOMAIN_PAGE_MAP[subdomain])
-        print(f"   {subdomain}, {count}")
+    filtered_words = [
+        (word, freq)
+        for word, freq in WORD_FREQUENCIES.items()
+        if word.isalpha()
+        and len(word) > 1
+        and word not in STOP_WORDS
+    ]
+
+    top_50 = sorted(
+        filtered_words,
+        key=lambda x: (-x[1], x[0])
+    )[:50]
+
+    for rank, (word, freq) in enumerate(top_50, 1):
+        print(f"   {rank}. {word}: {freq}")
 
 # functions for simHash, might move to a separate file later
 def get_64bit_hash(word: str) -> str:
