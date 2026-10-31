@@ -2,6 +2,9 @@ from utils import get_logger
 from crawler.frontier import Frontier
 from crawler.worker import Worker
 
+from urllib.parse import urldefrag
+from hashlib import sha256
+
 class Crawler(object):
     def __init__(self, config, restart, frontier_factory=Frontier, worker_factory=Worker):
         self.config = config
@@ -32,3 +35,9 @@ class Crawler(object):
     def join(self):
         for worker in self.workers:
             worker.join()
+
+    def normalize(url):
+        return urldefrag(url)[0]
+
+    def get_urlhash(url):
+        return sha256(normalize(url).encode("utf-8")).hexdigest()

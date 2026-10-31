@@ -359,7 +359,21 @@ def is_valid(url) -> bool:
             path
         ):
             return False
+        
+        # skip repetitive photo gallery pages
+        # keep the eppstein publications since they have useful text
+        if hostname in {"ics.uci.edu", "www.ics.uci.edu"}:
+            if path.startswith("/~eppstein/pix/"):
+                if path != "/~eppstein/pix/index.html":
+                    return False
 
+        # avoid monthly calendar archives that repeat event listings
+        segments = [s for s in path.split("/") if s]
+
+        if any(s in {"events", "calendar", "calendars"} for s in segments):
+            if any(re.fullmatch(r"\d{4}-\d{2}", s) for s in segments):
+                return False
+        
         return True
 
     except TypeError:
@@ -453,7 +467,25 @@ def _is_duplicate_page(page_text: str) -> bool:
     SIMHASHES.add(fingerprint)
     return False
 
+def print_crawl_analytics():
+    # q3: show the most common words without numbers or stop words
+    print("\n3. Top 50 Most Common Words (excluding stop words):")
 
+    filtered_words = [
+        (word, freq)
+        for word, freq in WORD_FREQUENCIES.items()
+        if word.isalpha()
+        and len(word) > 1
+        and word not in STOP_WORDS
+    ]
+
+    top_50 = sorted(
+        filtered_words,
+        key=lambda x: (-x[1], x[0])
+    )[:50]
+
+    for rank, (word, freq) in enumerate(top_50, 1):
+        print(f"   {rank}. {word}: {freq}")
 
 # functions for simHash, might move to a separate file later
 def _get_64bit_hash(word: str) -> str:
