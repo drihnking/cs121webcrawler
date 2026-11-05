@@ -7,6 +7,7 @@ from urllib.parse import urlparse, parse_qsl
 
 from utils import get_logger, get_urlhash, normalize
 from scraper import is_valid
+from crawler.robots import RobotsManager
 
 
 class Frontier:
@@ -30,6 +31,8 @@ class Frontier:
         # separate lock reserves request slots without blocking frontier queue access
         self.politeness_lock = Lock()
         self.next_request_time = {}
+        # share robots rules between both workers
+        self.robots = RobotsManager(config, self)
 
         # shelve must only be read/written while holding self.condition.
         if restart:
@@ -168,7 +171,7 @@ class Frontier:
             self.outstanding -= 1
             self.condition.notify_all()
 
-    def wait_for_domain(self, url):
+    def wait_for_domain(self, url, extra_delay=0.0):
         """reserve a polite start time for this domain; sleep until that slot."""
         hostname = (urlparse(url).hostname or "").lower()
 
@@ -192,7 +195,7 @@ class Frontier:
             now = time.monotonic()
             slot = max(now, self.next_request_time.get(domain, 0.0))
             self.next_request_time[domain] = (
-                slot + max(0.5, self.config.time_delay)
+                slot + max(0.5, self.config.time_delay, extra_delay)
             )
 
         # sleep outside the lock so other domains can reserve slots

@@ -46,7 +46,20 @@ class Worker(Thread):
                 self.logger.info("DEBUG: About to download %s", url)
                 log_memory("before download")
 
-                self.frontier.wait_for_domain(url)
+                # check robots.txt before downloading the page
+                robots_allowed = self.frontier.robots.allowed(url)
+
+                if robots_allowed is False:
+                    self.logger.info("Robots disallowed: %s", url)
+                    completed = True
+                    continue
+
+                if robots_allowed is None:
+                    self.logger.warning("Robots unavailable, deferring: %s", url)
+                    continue
+
+                # follow the site's crawl delay
+                self.frontier.wait_for_domain(url, self.frontier.robots.crawl_delay(url))
 
                 self.logger.info("DEBUG: Calling download() for %s", url)
                 resp = download(url, self.config, self.logger)
